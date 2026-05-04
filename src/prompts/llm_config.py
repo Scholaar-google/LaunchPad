@@ -1,16 +1,15 @@
 """Shared LLM client configuration with retry logic and structured logging.
 
-Supports per-agent LLM configuration via AGENT_LLM_CONFIG JSON env var.
+Supports per-agent LLM configuration via AGENT_LLM_CONFIG_<AGENT> JSON env vars.
 Each agent can use a different model provider (DeepSeek, OpenAI, Anthropic, etc.)
 via OpenAI-compatible API. Falls back to global DEEPSEEK_* defaults.
 
-AGENT_LLM_CONFIG JSON format:
-{
-  "intake": {"api_key": "sk-xxx", "base_url": "https://api.openai.com", "model": "gpt-4o"},
-  "synthesis": {"model": "deepseek-v4-pro"},
-  "feasibility": {}
-}
+Per-agent config format:
+  AGENT_LLM_CONFIG_INTAKE={"api_key":"sk-xxx","base_url":"https://api.openai.com","model":"gpt-4o"}
+  AGENT_LLM_CONFIG_SYNTHESIS={"model":"claude-sonnet-4-20250514"}
+
 All fields per agent are optional. Missing fields fall back to global defaults.
+Unconfigured agents use global defaults entirely.
 """
 
 from __future__ import annotations
@@ -53,7 +52,15 @@ class Settings(BaseSettings):
     llm_timeout: int = 30
     parallel_agent_timeout: int = 60
     corporate_strategy: str = "balanced"
-    agent_llm_config: str = ""
+
+    # Per-agent LLM config (JSON strings, optional)
+    agent_llm_config_intake: str = ""
+    agent_llm_config_dispatch: str = ""
+    agent_llm_config_feasibility: str = ""
+    agent_llm_config_resource: str = ""
+    agent_llm_config_risk: str = ""
+    agent_llm_config_synthesis: str = ""
+    agent_llm_config_review: str = ""
 
 
 @lru_cache(maxsize=1)
@@ -61,30 +68,33 @@ def get_settings() -> Settings:
     return Settings()
 
 
-@lru_cache(maxsize=1)
-def _get_parsed_agent_config() -> dict[str, dict[str, str]]:
-    """Parse AGENT_LLM_CONFIG JSON. Returns {} if not set or invalid."""
-    settings = get_settings()
-    raw = settings.agent_llm_config.strip()
+def _parse_agent_json(raw: str) -> dict[str, str]:
+    """Parse a single agent's JSON config string. Returns {} on empty or invalid."""
+    raw = raw.strip()
     if not raw:
         return {}
     try:
         data = json_module.loads(raw)
-        if not isinstance(data, dict):
-            return {}
-        return {
-            k: v
-            for k, v in data.items()
-            if isinstance(v, dict) and k in _AGENT_NAMES
-        }
+        return data if isinstance(data, dict) else {}
     except (json_module.JSONDecodeError, TypeError):
-        logger.warning("agent_llm_config_parse_failed")
+        logger.warning("agent_llm_config_parse_failed", raw=raw[:100])
         return {}
 
 
 def _get_agent_llm_params(agent_name: str) -> dict[str, str]:
     settings = get_settings()
-    agent_config = _get_parsed_agent_config().get(agent_name, {})
+
+    field_map: dict[str, str] = {
+        "intake": settings.agent_llm_config_intake,
+        "dispatch": settings.agent_llm_config_dispatch,
+        "feasibility": settings.agent_llm_config_feasibility,
+        "resource": settings.agent_llm_config_resource,
+        "risk": settings.agent_llm_config_risk,
+        "synthesis": settings.agent_llm_config_synthesis,
+        "review": settings.agent_llm_config_review,
+    }
+
+    agent_config = _parse_agent_json(field_map.get(agent_name, ""))
 
     api_key = agent_config.get("api_key") or settings.deepseek_api_key
     if not api_key:

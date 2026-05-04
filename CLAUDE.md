@@ -144,41 +144,31 @@ LLM_MODEL=deepseek-v4-pro   # LLM 模型名（全局默认）
 LLM_TIMEOUT=30               # LLM 调用超时（秒）
 PARALLEL_AGENT_TIMEOUT=60    # 并行 Agent 超时（秒）
 CORPORATE_STRATEGY=balanced  # 企业战略优先级：growth/balanced/conservative
-AGENT_LLM_CONFIG=            # JSON：按 Agent 独立 LLM 配置（可选，JSON 格式）
+AGENT_LLM_CONFIG_INTAKE={}   # 按 Agent 独立 LLM 配置（可选，JSON 格式）
+AGENT_LLM_CONFIG_DISPATCH={}
+AGENT_LLM_CONFIG_FEASIBILITY={}
+AGENT_LLM_CONFIG_RESOURCE={}
+AGENT_LLM_CONFIG_RISK={}
+AGENT_LLM_CONFIG_SYNTHESIS={}
+AGENT_LLM_CONFIG_REVIEW={}
 ```
 
-### AGENT_LLM_CONFIG 格式
+### Agent 独立 LLM 配置
 
-通过 JSON 集中配置每个 Agent 的 LLM 厂商、模型、API Key。未配置的字段自动回退到全局默认值。
+每个 Agent 一个单独的配置项，值为 JSON 对象，内含 `api_key`、`base_url`、`model`（均可选）。
+未配置的字段自动回退到全局默认值（`DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `LLM_MODEL`）。
 
-```json
-{
-  "intake": {
-    "api_key": "sk-xxx",
-    "base_url": "https://api.openai.com",
-    "model": "gpt-4o"
-  },
-  "dispatch": {},
-  "feasibility": {},
-  "resource": {
-    "model": "deepseek-chat"
-  },
-  "risk": {},
-  "synthesis": {
-    "api_key": "sk-ant-xxx",
-    "base_url": "https://api.anthropic.com",
-    "model": "claude-sonnet-4-20250514"
-  },
-  "review": {}
-}
+```bash
+# 示例: intake 使用 OpenAI，synthesis 使用 Anthropic Claude
+AGENT_LLM_CONFIG_INTAKE={"api_key":"sk-xxx","base_url":"https://api.openai.com","model":"gpt-4o"}
+AGENT_LLM_CONFIG_SYNTHESIS={"api_key":"sk-ant-xxx","base_url":"https://api.anthropic.com","model":"claude-sonnet-4-20250514"}
+AGENT_LLM_CONFIG_RESOURCE={"model":"deepseek-chat"}
 ```
 
-- 支持的 agent 名称：`intake`、`dispatch`、`feasibility`、`resource`、`risk`、`synthesis`、`review`
-- 每个 agent 的 `api_key`（缺省→DEEPSEEK_API_KEY）、`base_url`（缺省→DEEPSEEK_BASE_URL）、`model`（缺省→LLM_MODEL）均可独立配置
-- 全部使用默认配置时可为空对象 `{}`
+- 支持的 agent 名称：`INTAKE`、`DISPATCH`、`FEASIBILITY`、`RESOURCE`、`RISK`、`SYNTHESIS`、`REVIEW`
+- 每个 agent 的 `api_key`、`base_url`、`model` 均可独立配置，缺省回退到全局值
+- 全部使用默认值时可为空 JSON `{}`
 - document Agent 不调用 LLM，无配置项
-CORPORATE_STRATEGY=balanced  # 企业战略优先级：growth/balanced/conservative
-```
 
 敏感文件禁止提交：`.env`、`.env.*`（`.env.example` 除外）、`secrets/`、`output/`
 
