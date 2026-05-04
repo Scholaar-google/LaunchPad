@@ -12,7 +12,7 @@
 
 - **运行时**：Python 3.11+
 - **Agent 框架**：LangGraph（有状态多 Agent 工作流）
-- **LLM**：DeepSeek V4 Pro API（deepseek-v4-pro）
+- **LLM**：DeepSeek V4 Pro API（deepseek-v4-pro），兼容 OpenAI SDK
 - **向量数据库**：Qdrant（历史项目相似案例检索）
 - **文档生成**：python-docx
 - **后端 API**：FastAPI
@@ -40,13 +40,24 @@ src/
 │   ├── template_renderer.py  # 立项文档模板渲染
 │   └── conflict_detector.py  # 多 Agent 结论冲突检测
 ├── api/                 # FastAPI 接口层
-│   ├── routes.py
-│   └── schemas.py
+│   ├── routes.py             # API 路由
+│   └── schemas.py            # ORM 模型
+├── prompts/             # Prompt 模板（禁止 Agent 内硬编码）
+│   ├── templates.py          # 任务 prompt + Agent system prompt
+│   └── llm_config.py         # LLM 客户端 + 重试逻辑 + 配置
 └── frontend/            # React 前端
-    ├── components/
-    │   ├── ChatPanel.tsx      # 对话界面
-    │   └── ReasoningPanel.tsx # 推理过程可视化（侧边栏）
-    └── pages/
+    ├── src/
+    │   ├── App.tsx
+    │   ├── main.tsx
+    │   ├── components/
+    │   │   ├── ChatPanel.tsx      # 对话界面
+    │   │   └── ReasoningPanel.tsx # 推理过程可视化（侧边栏 SSE）
+    │   └── pages/
+    │       └── ProjectList.tsx    # 项目列表页
+    ├── index.html
+    ├── package.json
+    ├── tsconfig.json
+    └── vite.config.ts
 ```
 
 辅助目录：
@@ -84,11 +95,11 @@ python scripts/seed_qdrant.py  # 导入初始历史项目数据
 
 本项目的核心是 LangGraph 有状态工作流，开发时必须遵守以下规范：
 
-**状态管理**：所有 Agent 共享 `GlobalState`（定义在 `graph/state.py`），禁止 Agent 之间直接传参，所有中间结果必须写入全局状态。
+**状态管理**：所有 Agent 共享 `GlobalState`（定义在 `graph/state.py`），禁止 Agent 之间直接传参，所有中间结果必须写入全局状态。workflow 节点返回的 dict 由 LangGraph 自动合并入 state，禁止在节点函数内直接原地修改 `state` 对象。
 
-**并行执行**：可行性、资源、风险三个 Agent 通过 LangGraph 的 `parallel` 节点并发运行，综合 Agent 等待三者全部完成后再启动。
+**并行执行**：可行性、资源、风险三个 Agent 通过 LangGraph 的 `parallel` 节点并发运行，综合 Agent 等待三者全部完成后再启动。并行超时通过 `asyncio.wait_for()` 强制执行（默认 60s）。
 
-**推理可追溯**：综合 Agent 的每一步推理必须写入 `state.reasoning_chain`（列表结构），前端 `ReasoningPanel` 实时展示，不允许跳过中间步骤直接输出结论。
+**推理可追溯**：综合 Agent 的每一步推理必须写入 `state.reasoning_chain`（列表结构），前端 `ReasoningPanel` 通过 SSE 实时展示，不允许跳过中间步骤直接输出结论。synthesis Agent 构建本地 `reasoning_chain` 列表通过返回 dict 写入 state，禁止使用 `state.setdefault().append()` 原地修改。
 
 **人工介入点**：审核 Agent 标记置信度 < 0.7 的判断为 `NEEDS_REVIEW`，系统暂停并等待人工确认后继续，不允许自动通过。
 
@@ -99,7 +110,10 @@ python scripts/seed_qdrant.py  # 导入初始历史项目数据
 1. **汇总层**：提取三个并行 Agent 的核心结论与置信度
 2. **冲突识别层**：调用 `conflict_detector` 找出结论间矛盾点
 3. **路径推演层**：针对每个矛盾推演 2~3 种解决路径
-4. **决策层**：结合企业战略优先级（从配置读取）选择最优路径
+4. **决策层**：结合企业战略优先级（从 `CORPORATE_STRATEGY` 配置读取）选择最优路径。可选值：
+   - `growth` — 快速增长，偏好高投入高产出，容忍风险
+   - `balanced` — 稳健发展，性价比优先，中等风险偏好（默认）
+   - `conservative` — 成本控制，安全第一，保守策略
 5. **输出层**：生成最终建议（立项/缓议/拒绝）+ 关键假设 + 不确定项清单
 
 禁止跳过任何一步，即使前序步骤结论已经非常明确。
@@ -107,33 +121,54 @@ python scripts/seed_qdrant.py  # 导入初始历史项目数据
 ## 代码规范
 
 - **类型注解**：所有函数必须有完整类型注解，使用 `mypy --strict` 检查
-- **Agent 返回值**：统一返回 `AgentResult` dataclass，包含 `conclusion`、`confidence`、`reasoning`、`missing_info` 四个字段
-- **错误处理**：LLM 调用必须有 retry 逻辑（指数退避，最多 3 次），超时统一设为 30s
+- **Agent 返回值**：所有 8 个 Agent 统一返回 `AgentResult` dataclass，包含 `conclusion`、`confidence`、`reasoning`、`missing_info` 四个字段。返回 dict 中以 `{agent_name}_agent_result` 键存入 state
+- **错误处理**：LLM 调用必须有 retry 逻辑（指数退避，最多 3 次），超时统一设为 30s。retry 等待使用 `await asyncio.sleep()`，禁止同步 `time.sleep()` 阻塞事件循环
 - **日志**：使用 `structlog`，每个 Agent 调用记录输入 token、输出 token、耗时
-- **禁止**：不允许在 Agent 实现中硬编码 prompt，所有 prompt 模板放在 `src/prompts/` 目录
+- **Prompt 管理**：禁止在 Agent 实现中硬编码任何 prompt，所有 prompt 模板放在 `src/prompts/templates.py`：
+  - `SYSTEM_PROMPTS` 字典存放任务 prompt（如 `FEASIBILITY_PROMPT`）
+  - `AGENT_SYSTEM_PROMPTS` 字典存放 Agent 的 system prompt（如 `FEASIBILITY_SYSTEM`）
+  - Agent 代码通过 `AGENT_SYSTEM_PROMPTS["feasibility"]` 引用
 
 ## 环境变量
 
 ```bash
-DEEPSEEK_API_KEY=           # 必填：DeepSeek API Key
-QDRANT_URL=                 # 必填：Qdrant 服务地址
-DATABASE_URL=               # 必填：PostgreSQL 连接串
-MAX_DIALOG_TURNS=3          # 接收 Agent 最大追问轮次，默认 3
-CONFIDENCE_THRESHOLD=0.7    # 低于此值触发人工审核
+DEEPSEEK_API_KEY=            # 必填：DeepSeek API Key
+DEEPSEEK_BASE_URL=           # DeepSeek API 地址，默认 https://api.deepseek.com
+QDRANT_URL=                  # 必填：Qdrant 服务地址
+DATABASE_URL=                # 必填：PostgreSQL 连接串
+MAX_DIALOG_TURNS=3           # 接收 Agent 最大追问轮次，默认 3
+CONFIDENCE_THRESHOLD=0.7     # 低于此值触发人工审核
 ENABLE_REASONING_STREAM=true # 是否流式输出推理过程
+LLM_MODEL=deepseek-v4-pro   # LLM 模型名
+LLM_TIMEOUT=30               # LLM 调用超时（秒）
+PARALLEL_AGENT_TIMEOUT=60    # 并行 Agent 超时（秒）
+CORPORATE_STRATEGY=balanced  # 企业战略优先级：growth/balanced/conservative
 ```
 
-敏感文件禁止提交：`.env`、`.env.*`、`secrets/`
+敏感文件禁止提交：`.env`、`.env.*`（`.env.example` 除外）、`secrets/`、`output/`
+
+## API 接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/projects` | 创建新项目，提交需求描述 |
+| POST | `/api/projects/{id}/dialog` | 提交对话回答 |
+| POST | `/api/projects/{id}/confirm` | 人工确认审核 |
+| GET | `/api/projects` | 获取项目列表 |
+| GET | `/api/projects/{id}` | 获取项目详情 |
+| GET | `/api/projects/{id}/stream` | SSE 流式推理过程 |
+| GET | `/api/projects/{id}/download` | 下载生成的 .docx 立项文档 |
 
 ## 重要注意事项
 
 - **定位边界**：系统输出始终是"辅助建议"而非"最终决策"，文档生成 Agent 的每份报告末尾必须附加免责声明
 - **历史数据飞轮**：资源评估 Agent 依赖 Qdrant 中的历史项目数据，初始数据量不足 20 条时，置信度会显著偏低，这是正常现象
-- **并行 Agent 超时**：三个并行 Agent 设置统一超时（默认 60s），任一超时则该 Agent 返回空结果，综合 Agent 必须能处理部分缺失的情况
-- **前端推理面板**：`ReasoningPanel` 通过 SSE 实时接收 `state.reasoning_chain` 更新，后端必须在每步推理完成后立即 flush
+- **并行 Agent 超时**：三个并行 Agent 设置统一超时（默认 60s），通过 `asyncio.wait_for()` 执行，任一超时则该 Agent 返回空结果，综合 Agent 必须能处理部分缺失的情况
+- **前端推理面板**：`ReasoningPanel` 通过 SSE 实时接收 `state.reasoning_chain` 更新，后端 SSE 循环使用 `await asyncio.sleep(0.5)` 轮询避免 CPU 100%
+- **文档同步规则**：新增、修改或删除代码后，必须检查 `docs/` 目录下的相关文档，如有涉及需同步更新文档内容
 
 ## 参考文档
 
-- @docs/agent_architecture.md - Agent 协作架构与状态流转详细说明
-- @docs/reasoning_chain.md - 长链推理五步结构规范与示例
-- @docs/template_spec.md - 立项文档模板字段规范
+- See docs/agent_architecture.md - Agent 协作架构与状态流转详细说明
+- See docs/reasoning_chain.md - 长链推理五步结构规范与示例
+- See docs/template_spec.md - 立项文档模板字段规范
