@@ -336,7 +336,11 @@ async def stream_reasoning(project_id: str) -> StreamingResponse:
                         step_data = step
                     else:
                         step_data = {}
-                    yield f"data: {json.dumps({'type': 'reasoning_step', 'step': step_data, 'phase': phase_str}, default=str)}\n\n"
+                    payload = json.dumps(
+                        {"type": "reasoning_step", "step": step_data, "phase": phase_str},
+                        default=str,
+                    )
+                    yield f"data: {payload}\n\n"
                 seen_steps = len(chain)
 
             if phase_str in ("complete", "error"):
