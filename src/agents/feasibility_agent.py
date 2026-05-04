@@ -28,7 +28,7 @@ async def run_feasibility(state: GlobalState) -> dict[str, Any]:
     )
 
     response = await llm_call(
-        AGENT_SYSTEM_PROMPTS["feasibility"], prompt, max_tokens=2048
+        AGENT_SYSTEM_PROMPTS["feasibility"], prompt, agent_name="feasibility", max_tokens=2048
     )
 
     try:

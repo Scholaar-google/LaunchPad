@@ -1,13 +1,25 @@
 """Shared LLM client configuration with retry logic and structured logging.
 
-Uses DeepSeek V4 Pro via OpenAI-compatible API.
+Supports per-agent LLM configuration via AGENT_LLM_CONFIG JSON env var.
+Each agent can use a different model provider (DeepSeek, OpenAI, Anthropic, etc.)
+via OpenAI-compatible API. Falls back to global DEEPSEEK_* defaults.
+
+AGENT_LLM_CONFIG JSON format:
+{
+  "intake": {"api_key": "sk-xxx", "base_url": "https://api.openai.com", "model": "gpt-4o"},
+  "synthesis": {"model": "deepseek-v4-pro"},
+  "feasibility": {}
+}
+All fields per agent are optional. Missing fields fall back to global defaults.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json as json_module
 import time
-from functools import cache
+from functools import lru_cache
+from typing import Any
 
 import structlog
 from openai import (
@@ -19,6 +31,8 @@ from openai import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = structlog.get_logger(__name__)
+
+_AGENT_NAMES = ("intake", "dispatch", "feasibility", "resource", "risk", "synthesis", "review")
 
 
 class Settings(BaseSettings):
@@ -39,35 +53,74 @@ class Settings(BaseSettings):
     llm_timeout: int = 30
     parallel_agent_timeout: int = 60
     corporate_strategy: str = "balanced"
+    agent_llm_config: str = ""
 
 
-@cache
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
 
 
-def _get_client() -> AsyncOpenAI:
+@lru_cache(maxsize=1)
+def _get_parsed_agent_config() -> dict[str, dict[str, str]]:
+    """Parse AGENT_LLM_CONFIG JSON. Returns {} if not set or invalid."""
     settings = get_settings()
-    if not settings.deepseek_api_key:
+    raw = settings.agent_llm_config.strip()
+    if not raw:
+        return {}
+    try:
+        data = json_module.loads(raw)
+        if not isinstance(data, dict):
+            return {}
+        return {
+            k: v
+            for k, v in data.items()
+            if isinstance(v, dict) and k in _AGENT_NAMES
+        }
+    except (json_module.JSONDecodeError, TypeError):
+        logger.warning("agent_llm_config_parse_failed")
+        return {}
+
+
+def _get_agent_llm_params(agent_name: str) -> dict[str, str]:
+    settings = get_settings()
+    agent_config = _get_parsed_agent_config().get(agent_name, {})
+
+    api_key = agent_config.get("api_key") or settings.deepseek_api_key
+    if not api_key:
         raise RuntimeError(
-            "DEEPSEEK_API_KEY is not set. Please configure it in your .env file."
+            f"DEEPSEEK_API_KEY is not set, and no api_key configured for agent '{agent_name}'. "
+            "Please configure it in your .env file."
         )
+
+    return {
+        "api_key": api_key,
+        "base_url": agent_config.get("base_url") or settings.deepseek_base_url,
+        "model": agent_config.get("model") or settings.llm_model,
+        "timeout": float(settings.llm_timeout),
+    }
+
+
+@lru_cache(maxsize=8)
+def _get_agent_client(agent_name: str) -> AsyncOpenAI:
+    params = _get_agent_llm_params(agent_name)
     return AsyncOpenAI(
-        api_key=settings.deepseek_api_key,
-        base_url=settings.deepseek_base_url,
-        timeout=float(settings.llm_timeout),
+        api_key=params["api_key"],
+        base_url=params["base_url"],
+        timeout=params["timeout"],
     )
 
 
 async def llm_call(
     system_prompt: str,
     user_message: str,
+    agent_name: str = "intake",
     model: str | None = None,
     max_tokens: int = 4096,
 ) -> str:
-    settings = get_settings()
-    model = model or settings.llm_model
-    client = _get_client()
+    params = _get_agent_llm_params(agent_name)
+    model = model or params["model"]
+    client = _get_agent_client(agent_name)
     max_retries = 3
 
     for attempt in range(max_retries):
@@ -85,6 +138,7 @@ async def llm_call(
             text = response.choices[0].message.content or ""
             logger.info(
                 "llm_call_success",
+                agent=agent_name,
                 model=model,
                 attempt=attempt + 1,
                 input_tokens=response.usage.prompt_tokens if response.usage else 0,
@@ -97,6 +151,7 @@ async def llm_call(
             elapsed = time.monotonic() - start_time
             logger.warning(
                 "llm_call_retry",
+                agent=agent_name,
                 model=model,
                 attempt=attempt + 1,
                 error=str(e),
@@ -110,6 +165,7 @@ async def llm_call(
         except APIStatusError as e:
             logger.error(
                 "llm_call_error",
+                agent=agent_name,
                 model=model,
                 status_code=e.status_code,
                 error=str(e),

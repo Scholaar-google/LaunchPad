@@ -137,3 +137,7 @@ Workflow 节点返回 dict 由 LangGraph 自动合并入 state，**禁止在节�
 4. **SSE 流式推送**：推理步骤实时更新前端推理面板，轮询间隔 0.5s
 5. **Strategy 可配置**：企业战略优先级通过 `CORPORATE_STRATEGY` 环境变量配置，影响综合决策层
 6. **Prompt 集中管理**：`templates.py` 分为 `SYSTEM_PROMPTS`（任务 prompt）和 `AGENT_SYSTEM_PROMPTS`（Agent 系统 prompt），Agent 代码通过字典引用
+7. **Agent 独立 LLM 配置**：通过 `AGENT_LLM_CONFIG` JSON 环境变量，每个 Agent 可配置不同的 LLM 厂商、API Key、模型。未配置的字段自动回退到全局默认值
+   - 示例: synthesis Agent 使用 Anthropic Claude，其他 Agent 使用 DeepSeek
+   - 实现: `llm_config.py` 中 `_get_agent_client(agent_name)` 按 agent 名称缓存 client 实例
+   - 调用规范: 每个 Agent 调用 `llm_call()` 必须传入 `agent_name` 参数

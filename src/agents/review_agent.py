@@ -34,7 +34,7 @@ async def run_review(state: GlobalState) -> dict[str, Any]:
     )
 
     response = await llm_call(
-        AGENT_SYSTEM_PROMPTS["review"], prompt, max_tokens=2048
+        AGENT_SYSTEM_PROMPTS["review"], prompt, agent_name="review", max_tokens=2048
     )
 
     try:

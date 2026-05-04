@@ -91,7 +91,7 @@ async def _generate_clarifying_questions(
         dialogue_history=json.dumps(dialogue_history, ensure_ascii=False),
     )
     response = await llm_call(
-        AGENT_SYSTEM_PROMPTS["intake_clarify"], prompt, max_tokens=1024
+        AGENT_SYSTEM_PROMPTS["intake_clarify"], prompt, agent_name="intake", max_tokens=1024
     )
 
     try:
@@ -117,7 +117,7 @@ async def _summarize_requirement(
         dialogue_history=json.dumps(dialogue_history, ensure_ascii=False),
     )
     response = await llm_call(
-        AGENT_SYSTEM_PROMPTS["intake_summarize"], prompt, max_tokens=2048
+        AGENT_SYSTEM_PROMPTS["intake_summarize"], prompt, agent_name="intake", max_tokens=2048
     )
 
     try:

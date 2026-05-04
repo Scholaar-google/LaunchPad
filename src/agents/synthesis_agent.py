@@ -82,7 +82,7 @@ async def run_synthesis(state: GlobalState) -> dict[str, Any]:
     )
 
     response = await llm_call(
-        AGENT_SYSTEM_PROMPTS["synthesis"], prompt, max_tokens=4096
+        AGENT_SYSTEM_PROMPTS["synthesis"], prompt, agent_name="synthesis", max_tokens=4096
     )
 
     try:

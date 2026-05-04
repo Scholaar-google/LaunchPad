@@ -20,7 +20,7 @@ async def run_dispatch(state: GlobalState) -> dict[str, Any]:
     prompt = DISPATCH_PROMPT.format(clarified_requirement=clarified)
 
     response = await llm_call(
-        AGENT_SYSTEM_PROMPTS["dispatch"], prompt, max_tokens=2048
+        AGENT_SYSTEM_PROMPTS["dispatch"], prompt, agent_name="dispatch", max_tokens=2048
     )
 
     try:

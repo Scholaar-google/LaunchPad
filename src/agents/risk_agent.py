@@ -28,7 +28,7 @@ async def run_risk(state: GlobalState) -> dict[str, Any]:
     )
 
     response = await llm_call(
-        AGENT_SYSTEM_PROMPTS["risk"], prompt, max_tokens=2048
+        AGENT_SYSTEM_PROMPTS["risk"], prompt, agent_name="risk", max_tokens=2048
     )
 
     try:

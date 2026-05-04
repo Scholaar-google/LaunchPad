@@ -31,7 +31,7 @@ async def run_resource(state: GlobalState) -> dict[str, Any]:
     )
 
     response = await llm_call(
-        AGENT_SYSTEM_PROMPTS["resource"], prompt, max_tokens=2048
+        AGENT_SYSTEM_PROMPTS["resource"], prompt, agent_name="resource", max_tokens=2048
     )
 
     try:

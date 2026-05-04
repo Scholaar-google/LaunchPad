@@ -123,25 +123,60 @@ python scripts/seed_qdrant.py  # 导入初始历史项目数据
 - **类型注解**：所有函数必须有完整类型注解，使用 `mypy --strict` 检查
 - **Agent 返回值**：所有 8 个 Agent 统一返回 `AgentResult` dataclass，包含 `conclusion`、`confidence`、`reasoning`、`missing_info` 四个字段。返回 dict 中以 `{agent_name}_agent_result` 键存入 state
 - **错误处理**：LLM 调用必须有 retry 逻辑（指数退避，最多 3 次），超时统一设为 30s。retry 等待使用 `await asyncio.sleep()`，禁止同步 `time.sleep()` 阻塞事件循环
-- **日志**：使用 `structlog`，每个 Agent 调用记录输入 token、输出 token、耗时
+- **日志**：使用 `structlog`，每个 Agent 调用记录 agent 名称、输入 token、输出 token、耗时
 - **Prompt 管理**：禁止在 Agent 实现中硬编码任何 prompt，所有 prompt 模板放在 `src/prompts/templates.py`：
   - `SYSTEM_PROMPTS` 字典存放任务 prompt（如 `FEASIBILITY_PROMPT`）
   - `AGENT_SYSTEM_PROMPTS` 字典存放 Agent 的 system prompt（如 `FEASIBILITY_SYSTEM`）
   - Agent 代码通过 `AGENT_SYSTEM_PROMPTS["feasibility"]` 引用
+- **LLM 调用规范**：所有 Agent 调用 `llm_call()` 时必须传入 `agent_name` 参数（如 `agent_name="synthesis"`），用于查找 Agent 专属的 LLM 配置。未配置时自动回退到全局默认值
 
 ## 环境变量
 
 ```bash
-DEEPSEEK_API_KEY=            # 必填：DeepSeek API Key
+DEEPSEEK_API_KEY=            # 必填：DeepSeek API Key（全局默认）
 DEEPSEEK_BASE_URL=           # DeepSeek API 地址，默认 https://api.deepseek.com
 QDRANT_URL=                  # 必填：Qdrant 服务地址
 DATABASE_URL=                # 必填：PostgreSQL 连接串
 MAX_DIALOG_TURNS=3           # 接收 Agent 最大追问轮次，默认 3
 CONFIDENCE_THRESHOLD=0.7     # 低于此值触发人工审核
 ENABLE_REASONING_STREAM=true # 是否流式输出推理过程
-LLM_MODEL=deepseek-v4-pro   # LLM 模型名
+LLM_MODEL=deepseek-v4-pro   # LLM 模型名（全局默认）
 LLM_TIMEOUT=30               # LLM 调用超时（秒）
 PARALLEL_AGENT_TIMEOUT=60    # 并行 Agent 超时（秒）
+CORPORATE_STRATEGY=balanced  # 企业战略优先级：growth/balanced/conservative
+AGENT_LLM_CONFIG=            # JSON：按 Agent 独立 LLM 配置（可选，JSON 格式）
+```
+
+### AGENT_LLM_CONFIG 格式
+
+通过 JSON 集中配置每个 Agent 的 LLM 厂商、模型、API Key。未配置的字段自动回退到全局默认值。
+
+```json
+{
+  "intake": {
+    "api_key": "sk-xxx",
+    "base_url": "https://api.openai.com",
+    "model": "gpt-4o"
+  },
+  "dispatch": {},
+  "feasibility": {},
+  "resource": {
+    "model": "deepseek-chat"
+  },
+  "risk": {},
+  "synthesis": {
+    "api_key": "sk-ant-xxx",
+    "base_url": "https://api.anthropic.com",
+    "model": "claude-sonnet-4-20250514"
+  },
+  "review": {}
+}
+```
+
+- 支持的 agent 名称：`intake`、`dispatch`、`feasibility`、`resource`、`risk`、`synthesis`、`review`
+- 每个 agent 的 `api_key`（缺省→DEEPSEEK_API_KEY）、`base_url`（缺省→DEEPSEEK_BASE_URL）、`model`（缺省→LLM_MODEL）均可独立配置
+- 全部使用默认配置时可为空对象 `{}`
+- document Agent 不调用 LLM，无配置项
 CORPORATE_STRATEGY=balanced  # 企业战略优先级：growth/balanced/conservative
 ```
 
