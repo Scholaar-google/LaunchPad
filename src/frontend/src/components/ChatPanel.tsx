@@ -37,6 +37,17 @@ interface ConfirmResponse {
   document_path: string | null
 }
 
+const COLORS = {
+  bgUser: '#e3f2fd',
+  bgSystem: '#fff3e0',
+  bgAssistant: '#f5f5f5',
+  primary: '#0f3460',
+  warning: '#f0a500',
+  success: '#4ecca3',
+  border: '#ddd',
+  textMuted: '#888',
+} as const
+
 const ChatPanel: React.FC<Props> = ({
   projectId,
   onProjectCreated,
@@ -50,11 +61,19 @@ const ChatPanel: React.FC<Props> = ({
   const [questions, setQuestions] = useState<QuestionItem[]>([])
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
+  const [needsReview, setNeedsReviewLocal] = useState(false)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
+  const sseReconnectRef = useRef<number>(0)
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = chatEndRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const isNearBottom = rect.top < window.innerHeight + 150
+    if (isNearBottom) {
+      el.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [messages, questions])
 
   useEffect(() => {
@@ -64,6 +83,7 @@ const ChatPanel: React.FC<Props> = ({
     }
     return () => {
       eventSourceRef.current?.close()
+      sseReconnectRef.current = 0
     }
   }, [projectId])
 
@@ -78,7 +98,9 @@ const ChatPanel: React.FC<Props> = ({
         if (data.type === 'reasoning_step' && data.step) {
           onReasoningSteps((prev: ReasoningStep[]) => [...prev, data.step])
         } else if (data.type === 'done') {
-          onPhaseUpdate(data.phase)
+          if (data.phase !== 'timeout') {
+            onPhaseUpdate(data.phase)
+          }
         }
       } catch {
         console.warn('SSE parse error')
@@ -87,6 +109,12 @@ const ChatPanel: React.FC<Props> = ({
 
     es.onerror = () => {
       es.close()
+      const retry = sseReconnectRef.current
+      if (retry < 5) {
+        const delay = Math.min(2000 * Math.pow(2, retry), 30000)
+        sseReconnectRef.current = retry + 1
+        setTimeout(() => startSSEStream(id), delay)
+      }
     }
   }
 
@@ -96,6 +124,7 @@ const ChatPanel: React.FC<Props> = ({
       if (!res.ok) return
       const data = await res.json()
       onPhaseUpdate(data.phase)
+      setNeedsReviewLocal(data.needs_review)
       onNeedsReview(data.needs_review)
       onDocumentPath(data.document_path)
       if (data.reasoning_chain?.length > 0) {
@@ -114,15 +143,14 @@ const ChatPanel: React.FC<Props> = ({
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requirement }),
+        body: JSON.stringify({ requirement: requirement.trim() }),
       })
+      if (!res.ok) throw new Error('Failed')
       const data: DialogResponse = await res.json()
 
       onProjectCreated(data.project_id)
       onReasoningSteps([])
-      setMessages([
-        { role: 'user', content: requirement },
-      ])
+      setMessages([{ role: 'user', content: requirement }])
 
       if (data.questions && data.questions.length > 0) {
         setQuestions(data.questions)
@@ -160,7 +188,7 @@ const ChatPanel: React.FC<Props> = ({
       const res = await fetch(`/api/projects/${projectId}/dialog`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(answers),
+        body: JSON.stringify({ answers }),
       })
       const data: DialogResponse = await res.json()
 
@@ -186,7 +214,7 @@ const ChatPanel: React.FC<Props> = ({
     }
   }, [projectId, answers, onPhaseUpdate])
 
-  const handleConfirm = useCallback(async () => {
+  const handleConfirm = useCallback(async (confirmed: boolean) => {
     if (!projectId) return
     setLoading(true)
 
@@ -194,30 +222,44 @@ const ChatPanel: React.FC<Props> = ({
       const res = await fetch(`/api/projects/${projectId}/confirm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: projectId, confirmed: true }),
+        body: JSON.stringify({ project_id: projectId, confirmed }),
       })
       const data: ConfirmResponse = await res.json()
 
-      setMessages((prev) => [
-        ...prev,
-        { role: 'system', content: `审核已通过，决策: ${data.final_decision}` },
-        { role: 'system', content: data.final_recommendation },
-      ])
+      if (confirmed) {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'system', content: `审核已通过，决策: ${data.final_decision}` },
+          { role: 'system', content: data.final_recommendation },
+        ])
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'system', content: `审核已驳回: ${data.final_recommendation}` },
+        ])
+      }
       onPhaseUpdate(data.phase)
+      setNeedsReviewLocal(false)
       onNeedsReview(false)
       onDocumentPath(data.document_path)
     } catch {
-      setMessages((prev) => [...prev, { role: 'system', content: '确认失败。' }])
+      setMessages((prev) => [...prev, { role: 'system', content: '确认操作失败。' }])
     } finally {
       setLoading(false)
     }
   }, [projectId, onPhaseUpdate, onNeedsReview, onDocumentPath])
 
+  const handleDownload = useCallback(() => {
+    if (projectId) {
+      window.open(`/api/projects/${projectId}/download`, '_blank')
+    }
+  }, [projectId])
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
         {messages.length === 0 && !projectId && (
-          <div style={{ textAlign: 'center', paddingTop: 60, color: '#888' }}>
+          <div style={{ textAlign: 'center', paddingTop: 60, color: COLORS.textMuted }}>
             <h3>企业智能需求分析与立项系统</h3>
             <p>在下方输入您的项目需求，系统将通过多轮对话帮您转化为标准立项文档。</p>
           </div>
@@ -232,10 +274,10 @@ const ChatPanel: React.FC<Props> = ({
               borderRadius: 8,
               background:
                 msg.role === 'user'
-                  ? '#e3f2fd'
+                  ? COLORS.bgUser
                   : msg.role === 'system'
-                  ? '#fff3e0'
-                  : '#f5f5f5',
+                  ? COLORS.bgSystem
+                  : COLORS.bgAssistant,
               maxWidth: '80%',
               alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
             }}
@@ -250,7 +292,7 @@ const ChatPanel: React.FC<Props> = ({
                   <div key={q.id} style={{ marginBottom: 8 }}>
                     <div style={{ fontWeight: 500, marginBottom: 4 }}>
                       {q.text}
-                      <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>
+                      <span style={{ fontSize: 11, color: COLORS.textMuted, marginLeft: 8 }}>
                         [{q.dimension}]
                       </span>
                     </div>
@@ -267,7 +309,7 @@ const ChatPanel: React.FC<Props> = ({
                       style={{
                         width: '100%',
                         padding: '6px 10px',
-                        border: '1px solid #ddd',
+                        border: `1px solid ${COLORS.border}`,
                         borderRadius: 4,
                         fontSize: 13,
                       }}
@@ -280,7 +322,7 @@ const ChatPanel: React.FC<Props> = ({
         ))}
 
         {loading && (
-          <div style={{ color: '#888', fontSize: 13, padding: 8 }}>
+          <div style={{ color: COLORS.textMuted, fontSize: 13, padding: 8 }}>
             正在分析...
           </div>
         )}
@@ -290,7 +332,7 @@ const ChatPanel: React.FC<Props> = ({
 
       <div
         style={{
-          borderTop: '1px solid #e0e0e0',
+          borderTop: `1px solid ${COLORS.border}`,
           padding: '12px 16px',
           background: '#fff',
         }}
@@ -315,7 +357,7 @@ const ChatPanel: React.FC<Props> = ({
               style={{
                 flex: 1,
                 padding: '8px 12px',
-                border: '1px solid #ddd',
+                border: `1px solid ${COLORS.border}`,
                 borderRadius: 6,
                 fontSize: 14,
               }}
@@ -339,7 +381,7 @@ const ChatPanel: React.FC<Props> = ({
               style={{
                 flex: 1,
                 padding: '8px 12px',
-                border: '1px solid #ddd',
+                border: `1px solid ${COLORS.border}`,
                 borderRadius: 6,
                 fontSize: 14,
               }}
@@ -356,16 +398,42 @@ const ChatPanel: React.FC<Props> = ({
 
         {projectId && (
           <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-            <button
-              onClick={handleConfirm}
-              disabled={loading}
-              style={{
-                ...primaryBtnStyle,
-                background: '#f0a500',
-              }}
-            >
-              人工确认审核
-            </button>
+            {needsReview ? (
+              <>
+                <button
+                  onClick={() => handleConfirm(true)}
+                  disabled={loading}
+                  style={{ ...primaryBtnStyle, background: COLORS.success }}
+                >
+                  批准审核
+                </button>
+                <button
+                  onClick={() => handleConfirm(false)}
+                  disabled={loading}
+                  style={{ ...primaryBtnStyle, background: '#e74c3c' }}
+                >
+                  驳回
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => handleConfirm(true)}
+                  disabled={loading}
+                  style={{ ...primaryBtnStyle, background: COLORS.warning }}
+                >
+                  人工确认审核
+                </button>
+                {documentPath && (
+                  <button
+                    onClick={handleDownload}
+                    style={{ ...primaryBtnStyle, background: COLORS.success }}
+                  >
+                    下载文档
+                  </button>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -375,7 +443,7 @@ const ChatPanel: React.FC<Props> = ({
 
 const primaryBtnStyle: React.CSSProperties = {
   padding: '8px 20px',
-  background: '#0f3460',
+  background: COLORS.primary,
   color: '#fff',
   border: 'none',
   borderRadius: 6,

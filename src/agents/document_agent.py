@@ -13,7 +13,9 @@ from src.tools.template_renderer import render_document
 
 logger = structlog.get_logger(__name__)
 
-_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "output")
+_OUTPUT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "output")
+)
 
 
 async def run_document(state: GlobalState) -> dict[str, Any]:

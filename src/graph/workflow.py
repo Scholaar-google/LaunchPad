@@ -85,7 +85,14 @@ def _should_continue_intake(state: GlobalState) -> Literal["intake", "dispatch"]
 
 
 def _should_continue_review(state: GlobalState) -> Literal["review", "document"]:
-    if state.get("needs_review", False) and not state.get("human_confirmed", False):
+    needs_review = state.get("needs_review", False)
+    human_confirmed = state.get("human_confirmed", False)
+    review_attempts = state.get("review_attempts", 0)
+
+    if needs_review and not human_confirmed:
+        if review_attempts >= 3:
+            logger.warning("review_max_attempts_reached", attempts=review_attempts)
+            return "document"
         return "review"
     return "document"
 

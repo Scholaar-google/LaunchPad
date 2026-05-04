@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.graph.state import create_initial_state
+from src.graph.state import WorkflowPhase, create_initial_state
 from src.graph.workflow import compile_workflow
 from src.prompts.llm_config import get_settings
 
@@ -31,11 +31,17 @@ settings = get_settings()
 workflow_app = compile_workflow()
 _in_memory_projects: dict[str, dict[str, Any]] = {}
 
+_INTAKE_PHASES = {WorkflowPhase.INIT, WorkflowPhase.INTAKE}
+
 
 def _persist_project_state(state: dict[str, Any]) -> None:
     project_id = str(state.get("project_id", ""))
     if project_id:
         _in_memory_projects[project_id] = dict(state)
+        if "created_at" not in _in_memory_projects[project_id]:
+            _in_memory_projects[project_id]["created_at"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
 
 
 # ---- Request/Response models ----
@@ -60,6 +66,10 @@ class HumanConfirmRequest(BaseModel):
     project_id: str
     confirmed: bool = True
     feedback: str = ""
+
+
+class DialogAnswersRequest(BaseModel):
+    answers: dict[str, str]
 
 
 class DialogResponse(BaseModel):
@@ -99,24 +109,31 @@ class ProjectDetailResponse(BaseModel):
 
 @app.post("/api/projects", response_model=DialogResponse)
 async def create_project(request: CreateProjectRequest) -> dict[str, Any]:
-    state = create_initial_state(request.requirement)
+    raw = request.requirement.strip()
+    if not raw:
+        raise HTTPException(status_code=422, detail="需求描述不能为空")
+
+    state = create_initial_state(raw)
     config = {"configurable": {"thread_id": state["project_id"]}}
 
     result = await workflow_app.ainvoke(state, config)
     _persist_project_state(result)
 
+    phase = result.get("phase")
+    phase_str = phase.value if isinstance(phase, WorkflowPhase) else str(phase)
+
     return {
         "project_id": result.get("project_id", ""),
-        "questions": result.get("dialog_history", []),
+        "questions": result.get("questions", []),
         "status": "created",
-        "phase": str(result.get("phase", "intake")),
+        "phase": phase_str or "intake",
     }
 
 
 @app.post("/api/projects/{project_id}/dialog", response_model=DialogResponse)
 async def continue_dialog(
     project_id: str,
-    answers: dict[str, str],
+    body: DialogAnswersRequest,
 ) -> dict[str, Any]:
     config = {"configurable": {"thread_id": project_id}}
 
@@ -125,23 +142,35 @@ async def continue_dialog(
         raise HTTPException(status_code=404, detail="Project not found")
 
     state = dict(current_state.values)
+
+    phase = state.get("phase")
+    if phase not in _INTAKE_PHASES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Project is in phase '{phase}', dialog not allowed",
+        )
+
+    answer_text = json.dumps(body.answers, ensure_ascii=False)
     state["dialog_history"] = state.get("dialog_history", []) + [
-        {"role": "user", "answers": answers}
+        {"role": "user", "content": answer_text}
     ]
-    state["human_confirmed"] = True
-    state["needs_review"] = False
     state["messages"] = state.get("messages", []) + [
-        {"role": "user", "content": json.dumps(answers, ensure_ascii=False)}
+        {"role": "user", "content": answer_text}
     ]
 
     result = await workflow_app.ainvoke(state, config)
     _persist_project_state(result)
 
+    result_phase = result.get("phase")
+    result_phase_str = (
+        result_phase.value if isinstance(result_phase, WorkflowPhase) else str(result_phase)
+    )
+
     return {
         "project_id": project_id,
-        "questions": result.get("dialog_history", []),
+        "questions": result.get("questions", []),
         "status": "active",
-        "phase": str(result.get("phase", "intake")),
+        "phase": result_phase_str or "intake",
     }
 
 
@@ -157,11 +186,28 @@ async def human_confirm(
         raise HTTPException(status_code=404, detail="Project not found")
 
     state = dict(current_state.values)
+
+    phase = state.get("phase")
+    if phase not in {WorkflowPhase.REVIEW, "review"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Project is in phase '{phase}', confirm only allowed in review",
+        )
+
     state["human_confirmed"] = request.confirmed
     if request.feedback:
         state["dialog_history"] = state.get("dialog_history", []) + [
             {"role": "human_review", "feedback": request.feedback}
         ]
+
+    if not request.confirmed:
+        return {
+            "project_id": project_id,
+            "phase": str(phase),
+            "final_decision": "rejected_by_human",
+            "final_recommendation": f"人工审核驳回: {request.feedback}",
+            "document_path": None,
+        }
 
     result = await workflow_app.ainvoke(state, config)
     _persist_project_state(result)
@@ -198,15 +244,23 @@ async def download_document(project_id: str) -> Any:
     state = current_state.values
     doc_path = state.get("document_path")
 
-    if not doc_path or not os.path.exists(doc_path):
-        raise HTTPException(status_code=404, detail="Document not found or not yet generated")
+    if not doc_path or not os.path.exists(str(doc_path)):
+        raise HTTPException(
+            status_code=404, detail="Document not found or not yet generated"
+        )
 
-    filename = os.path.basename(doc_path)
+    filename = os.path.basename(str(doc_path))
     return FileResponse(
-        path=doc_path,
+        path=str(doc_path),
         filename=filename,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str) -> dict[str, Any]:
+    _in_memory_projects.pop(project_id, None)
+    return {"deleted": True, "project_id": project_id}
 
 
 @app.get("/api/projects", response_model=list[ProjectResponse])
@@ -232,13 +286,13 @@ async def list_projects() -> list[dict[str, Any]]:
             "title": state.get("project_info", {}).get("title", ""),
             "status": str(state.get("phase", "init")),
             "phase": str(state.get("phase", "init")),
-            "created_at": None,
+            "created_at": state.get("created_at"),
             "needs_review": state.get("needs_review", False),
             "final_decision": str(state.get("final_decision", "")),
             "reasoning_chain": reasoning_chain,
         })
 
-    return sorted(items, key=lambda x: x["id"], reverse=True)
+    return sorted(items, key=lambda x: x.get("created_at") or "", reverse=True)
 
 
 @app.get("/api/projects/{project_id}/stream")
@@ -248,8 +302,11 @@ async def stream_reasoning(project_id: str) -> StreamingResponse:
 
         config = {"configurable": {"thread_id": project_id}}
         seen_steps = 0
+        max_iterations = 240
+        iterations = 0
 
-        while True:
+        while iterations < max_iterations:
+            iterations += 1
             try:
                 current_state = workflow_app.get_state(config)
             except Exception:
@@ -260,7 +317,8 @@ async def stream_reasoning(project_id: str) -> StreamingResponse:
 
             state = current_state.values
             chain = state.get("reasoning_chain", [])
-            phase = str(state.get("phase", ""))
+            phase = state.get("phase", "")
+            phase_str = phase.value if isinstance(phase, WorkflowPhase) else str(phase)
 
             if len(chain) > seen_steps:
                 new_steps = chain[seen_steps:]
@@ -278,14 +336,17 @@ async def stream_reasoning(project_id: str) -> StreamingResponse:
                         step_data = step
                     else:
                         step_data = {}
-                    yield f"data: {json.dumps({'type': 'reasoning_step', 'step': step_data, 'phase': phase}, default=str)}\n\n"
+                    yield f"data: {json.dumps({'type': 'reasoning_step', 'step': step_data, 'phase': phase_str}, default=str)}\n\n"
                 seen_steps = len(chain)
 
-            if phase in ("complete", "error"):
-                yield f"data: {json.dumps({'type': 'done', 'phase': phase})}\n\n"
+            if phase_str in ("complete", "error"):
+                yield f"data: {json.dumps({'type': 'done', 'phase': phase_str})}\n\n"
                 break
 
             await asyncio.sleep(0.5)
+
+        if iterations >= max_iterations:
+            yield f"data: {json.dumps({'type': 'done', 'phase': 'timeout'})}\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -318,6 +379,12 @@ def _serialize_state(state: dict[str, Any]) -> dict[str, Any]:
                 "confidence": s.get("confidence", 1.0),
             })
 
+    created_at = state.get("created_at")
+    if not created_at:
+        persisted = _in_memory_projects.get(str(state.get("project_id", "")))
+        if persisted:
+            created_at = persisted.get("created_at")
+
     return {
         "id": state.get("project_id", ""),
         "title": state.get("project_info", {}).get("title", ""),
@@ -339,6 +406,6 @@ def _serialize_state(state: dict[str, Any]) -> dict[str, Any]:
         "needs_review": state.get("needs_review", False),
         "human_confirmed": state.get("human_confirmed", False),
         "review_confidence": state.get("review_confidence"),
-        "created_at": None,
+        "created_at": created_at,
         "updated_at": None,
     }

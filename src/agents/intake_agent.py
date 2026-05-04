@@ -7,7 +7,7 @@ from typing import Any
 
 import structlog
 
-from src.graph.state import AgentResult, GlobalState, ProjectInfo
+from src.graph.state import AgentResult, GlobalState, ProjectInfo, WorkflowPhase
 from src.prompts.llm_config import get_settings, llm_call
 from src.prompts.templates import (
     AGENT_SYSTEM_PROMPTS,
@@ -24,6 +24,12 @@ async def run_intake(state: GlobalState) -> dict[str, Any]:
     current_turns = state.get("dialog_turns", 0)
     raw_requirement = state.get("raw_requirement", "")
 
+    if not raw_requirement or not raw_requirement.strip():
+        return {
+            "phase": WorkflowPhase.ERROR,
+            "error": "需求描述不能为空",
+        }
+
     if current_turns >= max_turns or state.get("human_confirmed", False):
         summary = await _summarize_requirement(
             raw_requirement,
@@ -33,14 +39,18 @@ async def run_intake(state: GlobalState) -> dict[str, Any]:
             conclusion=summary.get("title", "需求已澄清"),
             confidence=0.8,
             reasoning=f"经过 {current_turns} 轮对话完成需求澄清",
-            missing_info=[],
+            missing_info=summary.get("missing_info", []),
         )
         return {
             "clarified_requirement": json.dumps(summary, ensure_ascii=False),
             "project_info": _parse_to_project_info(summary),
             "intake_agent_result": result,
-            "phase": "dispatch",
+            "phase": WorkflowPhase.DISPATCH,
+            "questions": [],
         }
+
+    dialog_history = state.get("dialog_history", [])
+    new_history = list(dialog_history)
 
     if current_turns == 0:
         questions = await _generate_clarifying_questions(raw_requirement, [])
@@ -52,21 +62,23 @@ async def run_intake(state: GlobalState) -> dict[str, Any]:
             if isinstance(last_msg, str):
                 latest_answer = last_msg
             elif hasattr(last_msg, "content"):
-                latest_answer = last_msg.content
+                latest_answer = str(last_msg.content)
             elif isinstance(last_msg, dict):
-                latest_answer = last_msg.get("content", str(last_msg))
-        state["dialog_history"] = state.get("dialog_history", []) + [
+                latest_answer = str(last_msg.get("content", last_msg))
+        new_history = list(dialog_history) + [
             {"role": "user", "content": latest_answer}
         ]
         questions = await _generate_clarifying_questions(
             raw_requirement,
-            state.get("dialog_history", []),
+            new_history,
         )
 
     new_turns = current_turns + 1
     return {
         "dialog_turns": new_turns,
-        "needs_review": True,
+        "dialog_history": new_history,
+        "questions": questions,
+        "phase": WorkflowPhase.INTAKE,
     }
 
 

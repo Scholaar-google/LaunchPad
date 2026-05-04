@@ -169,6 +169,8 @@ RISK_PROMPT = """\
 SYNTHESIS_PROMPT = """\
 你是一个综合分析专家，负责整合多个分析维度的结论，做出最终决策。
 
+企业战略：{corporate_strategy}
+
 需求：{requirement}
 
 可行性分析：{feasibility_result}
@@ -189,7 +191,7 @@ SYNTHESIS_PROMPT = """\
 针对每个矛盾，推演2-3种解决路径。
 
 ## 第4步：决策层
-结合企业战略优先级，选择最优路径。
+结合上述企业战略，选择最优路径。
 
 ## 第5步：输出层
 生成最终建议（立项/缓议/拒绝）+ 关键假设 + 不确定项清单。
@@ -197,7 +199,7 @@ SYNTHESIS_PROMPT = """\
 以JSON格式输出：
 - final_decision: approve/defer/reject
 - recommendation: 最终建议文本
-- reasoning_chain: 五步推理数组
+- decision_reasoning: 决策推理过程
 - key_assumptions: 关键假设
 - uncertainties: 不确定项
 """

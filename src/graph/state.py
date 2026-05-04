@@ -84,12 +84,29 @@ class GlobalState(TypedDict, total=False):
     clarified_requirement: str | None
     dialog_history: list[dict[str, str]]
     dialog_turns: int
+    questions: list[dict[str, str]]
+    feasibility_focus: list[str]
+    resource_focus: list[str]
+    risk_focus: list[str]
     parallel_results: ParallelResults
     similar_projects: list[dict[str, Any]]
+    rationale: list[dict[str, Any]]
+    feasibility_result: dict[str, Any] | None
+    resource_result: dict[str, Any] | None
+    risk_result: dict[str, Any] | None
+    feasibility_agent_result: AgentResult | None
+    resource_agent_result: AgentResult | None
+    risk_agent_result: AgentResult | None
+    dispatch_agent_result: AgentResult | None
+    intake_agent_result: AgentResult | None
+    synthesis_agent_result: AgentResult | None
+    review_agent_result: AgentResult | None
+    document_agent_result: AgentResult | None
     reasoning_chain: list[ReasoningStep]
     conflicts: list[ConflictItem]
     review_flags: list[dict[str, Any]]
     needs_review: bool
+    review_attempts: int
     final_decision: FinalDecision | None
     final_recommendation: str
     key_assumptions: list[str]
@@ -97,6 +114,7 @@ class GlobalState(TypedDict, total=False):
     document_path: str | None
     error: str | None
     human_confirmed: bool
+    created_at: str | None
 
 
 def create_initial_state(raw_requirement: str) -> GlobalState:

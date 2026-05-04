@@ -64,6 +64,7 @@ def test_format_risk_prompt() -> None:
 def test_format_synthesis_prompt() -> None:
     result = format_prompt(
         "synthesis",
+        corporate_strategy="balanced策略上下文",
         requirement="测试需求",
         feasibility_result="{}",
         resource_result="{}",
@@ -71,3 +72,4 @@ def test_format_synthesis_prompt() -> None:
         conflicts="[]",
     )
     assert "测试需求" in result
+    assert "balanced策略上下文" in result

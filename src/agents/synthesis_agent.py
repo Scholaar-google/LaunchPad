@@ -71,6 +71,7 @@ async def run_synthesis(state: GlobalState) -> dict[str, Any]:
 
     # ---- Step 4 & 5: LLM-based Decision and Output ----
     prompt = SYNTHESIS_PROMPT.format(
+        corporate_strategy=corporate_strategy,
         requirement=requirement,
         feasibility_result=json.dumps(feasibility, ensure_ascii=False, default=str),
         resource_result=json.dumps(resource, ensure_ascii=False, default=str),

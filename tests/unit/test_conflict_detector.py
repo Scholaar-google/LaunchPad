@@ -50,3 +50,17 @@ def test_no_conflicts() -> None:
 def test_missing_agent_result() -> None:
     conflicts = detect_conflicts(None, None, None)
     assert len(conflicts) == 0
+
+
+def test_partial_missing_still_detects_conflicts() -> None:
+    feasibility = {"conclusion": "技术可行", "confidence": 0.85}
+    risk = {"conclusion": "高风险", "confidence": 0.7, "risk_score": 8.0, "risks": []}
+    conflicts = detect_conflicts(feasibility, None, risk)
+    assert any("可行性 vs 风险" in c.topic for c in conflicts)
+    assert len(conflicts) >= 1
+
+
+def test_single_missing_returns_empty() -> None:
+    feasibility = {"conclusion": "技术可行", "confidence": 0.85}
+    conflicts = detect_conflicts(feasibility, None, None)
+    assert len(conflicts) == 0

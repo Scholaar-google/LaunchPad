@@ -71,5 +71,6 @@ async def run_review(state: GlobalState) -> dict[str, Any]:
         "review_confidence": overall_confidence,
         "review_approved": approved,
         "review_agent_result": result,
+        "review_attempts": state.get("review_attempts", 0) + 1,
         "phase": "document" if not needs_review else "review",
     }

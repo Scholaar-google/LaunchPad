@@ -5,12 +5,12 @@ interface Props {
   steps: ReasoningStep[]
 }
 
-const LAYER_LABELS: Record<number, string> = {
-  1: '汇总层',
-  2: '冲突识别',
-  3: '路径推演',
-  4: '决策层',
-  5: '输出层',
+const LAYER_CONFIG: Record<number, { label: string; color: string }> = {
+  1: { label: '汇总层', color: '#2563eb' },
+  2: { label: '冲突识别', color: '#d97706' },
+  3: { label: '路径推演', color: '#7c3aed' },
+  4: { label: '决策层', color: '#059669' },
+  5: { label: '输出层', color: '#dc2626' },
 }
 
 const ReasoningPanel: React.FC<Props> = ({ steps }) => {
@@ -20,7 +20,9 @@ const ReasoningPanel: React.FC<Props> = ({ steps }) => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [steps])
 
-  if (!steps || steps.length === 0) {
+  const visibleSteps = steps.filter((s) => s.content && s.content.trim().length > 0)
+
+  if (!visibleSteps || visibleSteps.length === 0) {
     return (
       <div
         style={{
@@ -54,71 +56,63 @@ const ReasoningPanel: React.FC<Props> = ({ steps }) => {
         推理过程
       </h3>
 
-      {steps.map((step, i) => (
-        <div
-          key={i}
-          style={{
-            marginBottom: 12,
-            padding: '10px 12px',
-            background: '#fff',
-            border: '1px solid #e8e8e8',
-            borderRadius: 6,
-            borderLeft: `3px solid ${_layerColor(step.layer)}`,
-          }}
-        >
+      {visibleSteps.map((step, i) => {
+        const cfg = LAYER_CONFIG[step.layer] || { label: step.title, color: '#666' }
+        return (
           <div
+            key={i}
             style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: 6,
+              marginBottom: 12,
+              padding: '10px 12px',
+              background: '#fff',
+              border: '1px solid #e8e8e8',
+              borderRadius: 6,
+              borderLeft: `3px solid ${cfg.color}`,
             }}
           >
-            <span
+            <div
               style={{
-                fontSize: 12,
-                fontWeight: 600,
-                color: _layerColor(step.layer),
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: 6,
               }}
             >
-              Step {step.layer}: {LAYER_LABELS[step.layer] || step.title}
-            </span>
-            {step.confidence < 1.0 && (
-              <span style={{ fontSize: 11, color: '#888' }}>
-                {Math.round(step.confidence * 100)}%
+              <span
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: cfg.color,
+                }}
+              >
+                Step {step.layer}: {cfg.label}
               </span>
-            )}
+              {step.confidence < 1.0 && (
+                <span style={{ fontSize: 11, color: '#888' }}>
+                  {Math.round(step.confidence * 100)}%
+                </span>
+              )}
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: '#555',
+                whiteSpace: 'pre-wrap',
+                lineHeight: 1.5,
+              }}
+            >
+              {step.content}
+            </div>
+            <div style={{ fontSize: 10, color: '#bbb', marginTop: 4 }}>
+              {step.timestamp && new Date(step.timestamp).toLocaleTimeString()}
+            </div>
           </div>
-          <div
-            style={{
-              fontSize: 12,
-              color: '#555',
-              whiteSpace: 'pre-wrap',
-              lineHeight: 1.5,
-            }}
-          >
-            {step.content}
-          </div>
-          <div style={{ fontSize: 10, color: '#bbb', marginTop: 4 }}>
-            {step.timestamp && new Date(step.timestamp).toLocaleTimeString()}
-          </div>
-        </div>
-      ))}
+        )
+      })}
 
       <div ref={endRef} />
     </div>
   )
-}
-
-function _layerColor(layer: number): string {
-  const colors: Record<number, string> = {
-    1: '#2563eb',
-    2: '#d97706',
-    3: '#7c3aed',
-    4: '#059669',
-    5: '#dc2626',
-  }
-  return colors[layer] || '#666'
 }
 
 export default ReasoningPanel
