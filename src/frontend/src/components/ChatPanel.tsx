@@ -7,6 +7,7 @@ interface Props {
   onPhaseUpdate: (phase: string) => void
   onNeedsReview: (flag: boolean) => void
   onDocumentPath: (path: string | null) => void
+  onReasoningSteps: (steps: ReasoningStep[]) => void
 }
 
 interface Message {
@@ -42,13 +43,13 @@ const ChatPanel: React.FC<Props> = ({
   onPhaseUpdate,
   onNeedsReview,
   onDocumentPath,
+  onReasoningSteps,
 }) => {
   const [requirement, setRequirement] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
   const [questions, setQuestions] = useState<QuestionItem[]>([])
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
-  const [streamSteps, setStreamSteps] = useState<ReasoningStep[]>([])
   const chatEndRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
 
@@ -74,12 +75,14 @@ const ChatPanel: React.FC<Props> = ({
     es.addEventListener('message', (event) => {
       try {
         const data = JSON.parse(event.data)
-        if (data.type === 'reasoning_step') {
-          setStreamSteps((prev) => [...prev, data.step])
+        if (data.type === 'reasoning_step' && data.step) {
+          onReasoningSteps((prev: ReasoningStep[]) => [...prev, data.step])
         } else if (data.type === 'done') {
           onPhaseUpdate(data.phase)
         }
-      } catch {}
+      } catch {
+        console.warn('SSE parse error')
+      }
     })
 
     es.onerror = () => {
@@ -95,7 +98,12 @@ const ChatPanel: React.FC<Props> = ({
       onPhaseUpdate(data.phase)
       onNeedsReview(data.needs_review)
       onDocumentPath(data.document_path)
-    } catch {}
+      if (data.reasoning_chain?.length > 0) {
+        onReasoningSteps(data.reasoning_chain)
+      }
+    } catch {
+      console.warn('Failed to fetch project detail')
+    }
   }
 
   const handleSubmit = useCallback(async () => {
@@ -111,6 +119,7 @@ const ChatPanel: React.FC<Props> = ({
       const data: DialogResponse = await res.json()
 
       onProjectCreated(data.project_id)
+      onReasoningSteps([])
       setMessages([
         { role: 'user', content: requirement },
       ])
@@ -124,7 +133,7 @@ const ChatPanel: React.FC<Props> = ({
       }
 
       onPhaseUpdate(data.phase)
-    } catch (e) {
+    } catch {
       setMessages((prev) => [
         ...prev,
         { role: 'assistant', content: '请求失败，请检查服务是否启动。' },
@@ -132,7 +141,7 @@ const ChatPanel: React.FC<Props> = ({
     } finally {
       setLoading(false)
     }
-  }, [requirement, onProjectCreated, onPhaseUpdate])
+  }, [requirement, onProjectCreated, onPhaseUpdate, onReasoningSteps])
 
   const handleAnswerSubmit = useCallback(async () => {
     if (!projectId || Object.keys(answers).length === 0) return
@@ -279,7 +288,6 @@ const ChatPanel: React.FC<Props> = ({
         <div ref={chatEndRef} />
       </div>
 
-      {/* Input Area */}
       <div
         style={{
           borderTop: '1px solid #e0e0e0',

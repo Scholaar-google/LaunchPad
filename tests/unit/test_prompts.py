@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.prompts.templates import (
+    AGENT_SYSTEM_PROMPTS,
     FEASIBILITY_PROMPT,
     RESOURCE_PROMPT,
     RISK_PROMPT,
@@ -13,9 +14,21 @@ from src.prompts.templates import (
 
 
 def test_all_prompts_exist() -> None:
-    for name in ["intake", "dispatch", "feasibility", "resource", "risk", "synthesis", "review", "document"]:
+    for name in [
+        "intake", "dispatch", "feasibility", "resource",
+        "risk", "synthesis", "review", "document",
+    ]:
         prompt = get_prompt(name)
         assert len(prompt) > 0
+
+
+def test_all_system_prompts_exist() -> None:
+    for name in [
+        "intake_clarify", "intake_summarize", "dispatch",
+        "feasibility", "resource", "risk", "synthesis", "review",
+    ]:
+        assert name in AGENT_SYSTEM_PROMPTS
+        assert len(AGENT_SYSTEM_PROMPTS[name]) > 0
 
 
 def test_format_feasibility_prompt() -> None:

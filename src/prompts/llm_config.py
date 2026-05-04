@@ -5,12 +5,12 @@ Uses DeepSeek V4 Pro via OpenAI-compatible API.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from functools import cache
 
 import structlog
 from openai import (
-    APIError,
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-v4-pro"
     llm_timeout: int = 30
     parallel_agent_timeout: int = 60
+    corporate_strategy: str = "balanced"
 
 
 @cache
@@ -47,6 +48,10 @@ def get_settings() -> Settings:
 
 def _get_client() -> AsyncOpenAI:
     settings = get_settings()
+    if not settings.deepseek_api_key:
+        raise RuntimeError(
+            "DEEPSEEK_API_KEY is not set. Please configure it in your .env file."
+        )
     return AsyncOpenAI(
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
@@ -100,7 +105,7 @@ async def llm_call(
             if attempt == max_retries - 1:
                 raise
             wait = 2**attempt
-            time.sleep(wait)
+            await asyncio.sleep(wait)
 
         except APIStatusError as e:
             logger.error(

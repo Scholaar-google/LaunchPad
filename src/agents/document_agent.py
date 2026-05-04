@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime, timezone
 from typing import Any
 
 import structlog
 
-from src.graph.state import GlobalState
+from src.graph.state import AgentResult, FinalDecision, GlobalState
 from src.tools.template_renderer import render_document
 
 logger = structlog.get_logger(__name__)
+
+_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "output")
 
 
 async def run_document(state: GlobalState) -> dict[str, Any]:
@@ -22,10 +23,12 @@ async def run_document(state: GlobalState) -> dict[str, Any]:
     risk = state.get("risk_result") or {}
     recommendation = state.get("final_recommendation", "")
     final_decision = state.get("final_decision", "defer")
-    if hasattr(final_decision, "value"):
-        final_decision = str(final_decision.value)  # type: ignore[union-attr]
+    if isinstance(final_decision, FinalDecision):
+        final_decision = final_decision.value
     key_assumptions = state.get("key_assumptions", [])
     uncertainties = state.get("uncertainties", [])
+
+    now = datetime.now(timezone.utc)
 
     doc_bytes = render_document(
         project_info=project_info,
@@ -36,22 +39,32 @@ async def run_document(state: GlobalState) -> dict[str, Any]:
         final_decision=str(final_decision),
         key_assumptions=list(key_assumptions),
         uncertainties=list(uncertainties),
+        generated_at=now,
     )
 
-    output_dir = os.path.join(os.getcwd(), "output")
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(_OUTPUT_DIR, exist_ok=True)
 
     project_name = project_info.get("title", "project")
-    safe_name = "".join(c if c.isalnum() or c in "._- " else "_" for c in project_name)
-    filename = f"{safe_name}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.docx"
-    filepath = os.path.join(output_dir, filename)
+    safe_name = "".join(
+        c if c.isalnum() or c in "._- " else "_" for c in project_name
+    )
+    filename = f"{safe_name}_{now.strftime('%Y%m%d_%H%M%S')}.docx"
+    filepath = os.path.join(_OUTPUT_DIR, filename)
 
     with open(filepath, "wb") as f:
         f.write(doc_bytes)
 
     logger.info("document_generated", path=filepath)
 
+    result = AgentResult(
+        conclusion=f"立项文档已生成: {filename}",
+        confidence=1.0,
+        reasoning=f"文档路径: {filepath}",
+        missing_info=[],
+    )
+
     return {
         "document_path": filepath,
+        "document_agent_result": result,
         "phase": "complete",
     }

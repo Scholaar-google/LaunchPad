@@ -73,9 +73,9 @@ def detect_conflicts(
         conflicts.append(
             ConflictItem(
                 topic="资源计划一致性",
-                source_a="resource_agent",
+                source_a="resource_agent(团队规模)",
                 conclusion_a=f"团队规模 {team_size} 人",
-                source_b="resource_agent",
+                source_b="resource_agent(工期评估)",
                 conclusion_b=f"工期 {timeline} 个月",
                 resolution_paths=[
                     "增加工期至合理范围",

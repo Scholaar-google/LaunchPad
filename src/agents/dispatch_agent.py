@@ -7,9 +7,9 @@ from typing import Any
 
 import structlog
 
-from src.graph.state import GlobalState
+from src.graph.state import AgentResult, GlobalState
 from src.prompts.llm_config import llm_call
-from src.prompts.templates import DISPATCH_PROMPT
+from src.prompts.templates import AGENT_SYSTEM_PROMPTS, DISPATCH_PROMPT
 
 logger = structlog.get_logger(__name__)
 
@@ -18,9 +18,10 @@ async def run_dispatch(state: GlobalState) -> dict[str, Any]:
     clarified = state.get("clarified_requirement", state.get("raw_requirement", ""))
 
     prompt = DISPATCH_PROMPT.format(clarified_requirement=clarified)
-    system_prompt = "你是一个项目管理专家，负责拆解分析任务。请以JSON格式输出。"
 
-    response = await llm_call(system_prompt, prompt, max_tokens=2048)
+    response = await llm_call(
+        AGENT_SYSTEM_PROMPTS["dispatch"], prompt, max_tokens=2048
+    )
 
     try:
         data = json.loads(response)
@@ -45,10 +46,18 @@ async def run_dispatch(state: GlobalState) -> dict[str, Any]:
         risk_count=len(risk_points),
     )
 
+    result = AgentResult(
+        conclusion=f"已拆解为 3 个并行维度：可行性({len(feasibility_points)}项)、资源({len(resource_points)}项)、风险({len(risk_points)}项)",
+        confidence=0.9,
+        reasoning=f"根据澄清需求自动拆解分析任务",
+        missing_info=[],
+    )
+
     return {
         "feasibility_focus": feasibility_points,
         "resource_focus": resource_points,
         "risk_focus": risk_points,
+        "dispatch_agent_result": result,
         "phase": "parallel_analysis",
     }
 

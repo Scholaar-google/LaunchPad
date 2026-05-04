@@ -7,9 +7,9 @@ from typing import Any
 
 import structlog
 
-from src.graph.state import GlobalState
+from src.graph.state import AgentResult, GlobalState
 from src.prompts.llm_config import get_settings, llm_call
-from src.prompts.templates import REVIEW_PROMPT
+from src.prompts.templates import AGENT_SYSTEM_PROMPTS, REVIEW_PROMPT
 
 logger = structlog.get_logger(__name__)
 
@@ -32,9 +32,10 @@ async def run_review(state: GlobalState) -> dict[str, Any]:
         risk_result=json.dumps(risk, ensure_ascii=False, default=str),
         confidence_threshold=threshold,
     )
-    system_prompt = "你是一个审核专家，请以JSON格式输出。"
 
-    response = await llm_call(system_prompt, prompt, max_tokens=2048)
+    response = await llm_call(
+        AGENT_SYSTEM_PROMPTS["review"], prompt, max_tokens=2048
+    )
 
     try:
         data = json.loads(response)
@@ -48,13 +49,27 @@ async def run_review(state: GlobalState) -> dict[str, Any]:
         }
 
     overall_confidence = float(data.get("overall_confidence", 0.5))
+    needs_review = data.get("needs_human_review", False) or (
+        overall_confidence < threshold
+    )
+    approved = data.get("approved", False) and not needs_review
 
-    needs_review = data.get("needs_human_review", False) or (overall_confidence < threshold)
+    result = AgentResult(
+        conclusion="审核通过" if approved else "需要人工审核",
+        confidence=overall_confidence,
+        reasoning=(
+            f"审核置信度 {overall_confidence:.0%}, "
+            f"阀值 {threshold:.0%}, "
+            f"标记数: {len(data.get('flags', []))}"
+        ),
+        missing_info=[],
+    )
 
     return {
         "review_flags": data.get("flags", []),
         "needs_review": needs_review,
         "review_confidence": overall_confidence,
-        "review_approved": data.get("approved", False) and not needs_review,
+        "review_approved": approved,
+        "review_agent_result": result,
         "phase": "document" if not needs_review else "review",
     }

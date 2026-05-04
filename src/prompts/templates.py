@@ -4,6 +4,31 @@ from __future__ import annotations
 
 from typing import Any
 
+# ---- System prompts (agent instruction) ----
+
+
+INTAKE_CLARIFY_SYSTEM = "你是一个需求分析专家，请以JSON格式输出。"
+INTAKE_SUMMARIZE_SYSTEM = "你是一个需求分析专家，请以JSON格式输出总结。"
+DISPATCH_SYSTEM = "你是一个项目管理专家，负责拆解分析任务。请以JSON格式输出。"
+FEASIBILITY_SYSTEM = "你是一个技术可行性分析专家，请以JSON格式输出。"
+RESOURCE_SYSTEM = "你是一个资源评估专家，请以JSON格式输出。"
+RISK_SYSTEM = "你是一个风险评估专家，请以JSON格式输出。"
+SYNTHESIS_SYSTEM = "你是一个综合分析专家，请严格按照五步推理格式以JSON输出。"
+REVIEW_SYSTEM = "你是一个审核专家，请以JSON格式输出。"
+
+AGENT_SYSTEM_PROMPTS: dict[str, str] = {
+    "intake_clarify": INTAKE_CLARIFY_SYSTEM,
+    "intake_summarize": INTAKE_SUMMARIZE_SYSTEM,
+    "dispatch": DISPATCH_SYSTEM,
+    "feasibility": FEASIBILITY_SYSTEM,
+    "resource": RESOURCE_SYSTEM,
+    "risk": RISK_SYSTEM,
+    "synthesis": SYNTHESIS_SYSTEM,
+    "review": REVIEW_SYSTEM,
+}
+
+# ---- Task prompts ----
+
 INTAKE_SYSTEM_PROMPT = """\
 你是一个需求分析专家，负责通过多轮对话帮助业务人员澄清和细化项目需求。
 

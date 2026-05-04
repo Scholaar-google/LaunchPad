@@ -10,6 +10,7 @@ import structlog
 from src.graph.state import AgentResult, GlobalState, ProjectInfo
 from src.prompts.llm_config import get_settings, llm_call
 from src.prompts.templates import (
+    AGENT_SYSTEM_PROMPTS,
     INTAKE_CLARIFY_PROMPT,
     INTAKE_SUMMARIZE_PROMPT,
 )
@@ -24,29 +25,47 @@ async def run_intake(state: GlobalState) -> dict[str, Any]:
     raw_requirement = state.get("raw_requirement", "")
 
     if current_turns >= max_turns or state.get("human_confirmed", False):
-        result = await _summarize_requirement(
+        summary = await _summarize_requirement(
             raw_requirement,
             state.get("dialog_history", []),
         )
+        result = AgentResult(
+            conclusion=summary.get("title", "需求已澄清"),
+            confidence=0.8,
+            reasoning=f"经过 {current_turns} 轮对话完成需求澄清",
+            missing_info=[],
+        )
         return {
-            "clarified_requirement": json.dumps(result, ensure_ascii=False),
-            "project_info": _parse_to_project_info(result),
+            "clarified_requirement": json.dumps(summary, ensure_ascii=False),
+            "project_info": _parse_to_project_info(summary),
+            "intake_agent_result": result,
             "phase": "dispatch",
         }
 
     if current_turns == 0:
         questions = await _generate_clarifying_questions(raw_requirement, [])
     else:
-        latest_answer = state.get("messages", [])[-1].content if state.get("messages") else ""
-        state["dialog_history"].append({"content": latest_answer})
+        messages = state.get("messages", [])
+        latest_answer = ""
+        if messages:
+            last_msg = messages[-1]
+            if isinstance(last_msg, str):
+                latest_answer = last_msg
+            elif hasattr(last_msg, "content"):
+                latest_answer = last_msg.content
+            elif isinstance(last_msg, dict):
+                latest_answer = last_msg.get("content", str(last_msg))
+        state["dialog_history"] = state.get("dialog_history", []) + [
+            {"role": "user", "content": latest_answer}
+        ]
         questions = await _generate_clarifying_questions(
             raw_requirement,
             state.get("dialog_history", []),
         )
 
-    state["dialog_turns"] = current_turns + 1
+    new_turns = current_turns + 1
     return {
-        "dialog_turns": state["dialog_turns"],
+        "dialog_turns": new_turns,
         "needs_review": True,
     }
 
@@ -59,15 +78,22 @@ async def _generate_clarifying_questions(
         requirement=requirement,
         dialogue_history=json.dumps(dialogue_history, ensure_ascii=False),
     )
-    system_prompt = "你是一个需求分析专家，请以JSON格式输出。"
-    response = await llm_call(system_prompt, prompt, max_tokens=1024)
+    response = await llm_call(
+        AGENT_SYSTEM_PROMPTS["intake_clarify"], prompt, max_tokens=1024
+    )
 
     try:
         data = json.loads(response)
         return data.get("questions", [])
     except json.JSONDecodeError:
         logger.warning("intake_clarify_json_parse_error")
-        return [{"id": "q1", "text": "请更详细地描述您的项目需求，包括预期目标和约束条件。", "dimension": "general"}]
+        return [
+            {
+                "id": "q1",
+                "text": "请更详细地描述您的项目需求，包括预期目标和约束条件。",
+                "dimension": "general",
+            }
+        ]
 
 
 async def _summarize_requirement(
@@ -78,8 +104,9 @@ async def _summarize_requirement(
         requirement=requirement,
         dialogue_history=json.dumps(dialogue_history, ensure_ascii=False),
     )
-    system_prompt = "你是一个需求分析专家，请以JSON格式输出总结。"
-    response = await llm_call(system_prompt, prompt, max_tokens=2048)
+    response = await llm_call(
+        AGENT_SYSTEM_PROMPTS["intake_summarize"], prompt, max_tokens=2048
+    )
 
     try:
         return json.loads(response)
@@ -103,6 +130,8 @@ def _parse_to_project_info(data: dict[str, Any]) -> ProjectInfo:
         description=data.get("description", ""),
         background=data.get("background", ""),
         objectives=data.get("objectives", []),
+        scope_in=data.get("scope_in", []),
+        scope_out=data.get("scope_out", []),
         constraints=data.get("constraints", []),
         stakeholders=data.get("stakeholders", []),
         priority=data.get("priority", "medium"),

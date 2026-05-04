@@ -5,7 +5,6 @@ Nodes: intake -> dispatch -> [feasibility || resource || risk] -> synthesis -> r
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Literal
 
 import structlog
@@ -31,8 +30,6 @@ _PARALLEL_TIMEOUT = get_settings().parallel_agent_timeout
 async def _intake_node(state: GlobalState) -> dict[str, Any]:
     logger.info("workflow_intake_start", project_id=state.get("project_id"))
     result = await run_intake(state)
-    if "project_info" in result:
-        state["project_info"].update(result.pop("project_info"))
     return result
 
 

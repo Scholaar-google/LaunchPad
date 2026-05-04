@@ -39,10 +39,6 @@ const App: React.FC = () => {
     setPage('detail')
   }, [])
 
-  const handleBackToList = useCallback(() => {
-    setPage('list')
-  }, [])
-
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
       {/* Sidebar */}
@@ -111,6 +107,7 @@ const App: React.FC = () => {
                 onPhaseUpdate={setPhase}
                 onNeedsReview={setNeedsReview}
                 onDocumentPath={setDocumentPath}
+                onReasoningSteps={setReasoningSteps}
               />
             )}
             {page === 'list' && (
@@ -125,6 +122,7 @@ const App: React.FC = () => {
                 onPhaseUpdate={setPhase}
                 onNeedsReview={setNeedsReview}
                 onDocumentPath={setDocumentPath}
+                onReasoningSteps={setReasoningSteps}
               />
             )}
           </div>

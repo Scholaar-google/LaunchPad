@@ -4,7 +4,7 @@ Implements the 5-step reasoning chain:
 1. Summary layer
 2. Conflict identification layer
 3. Path exploration layer
-4. Decision layer
+4. Decision layer (incorporates corporate strategy)
 5. Output layer
 """
 
@@ -15,21 +15,33 @@ from typing import Any
 
 import structlog
 
-from src.graph.state import ConflictItem, FinalDecision, GlobalState, ReasoningStep
+from src.graph.state import AgentResult, ConflictItem, FinalDecision, GlobalState, ReasoningStep
 from src.prompts.llm_config import get_settings, llm_call
-from src.prompts.templates import SYNTHESIS_PROMPT
+from src.prompts.templates import AGENT_SYSTEM_PROMPTS, SYNTHESIS_PROMPT
 from src.tools.conflict_detector import detect_conflicts
 
 logger = structlog.get_logger(__name__)
 
 
+def _get_corporate_strategy_context(strategy: str) -> str:
+    strategies: dict[str, str] = {
+        "growth": "企业当前战略优先级为：快速增长、抢占市场。优先选择高投入高产出的路径，容忍适度风险。",
+        "balanced": "企业当前战略优先级为：稳健发展、风险平衡。优先选择性价比最优的路径，中等风险偏好。",
+        "conservative": "企业当前战略优先级为：成本控制、安全第一。优先选择低风险低成本的路径，保守策略。",
+    }
+    return strategies.get(strategy, strategies["balanced"])
+
+
 async def run_synthesis(state: GlobalState) -> dict[str, Any]:
     settings = get_settings()
+    corporate_strategy = _get_corporate_strategy_context(settings.corporate_strategy)
 
     feasibility = state.get("feasibility_result")
     resource = state.get("resource_result")
     risk = state.get("risk_result")
     requirement = state.get("clarified_requirement", state.get("raw_requirement", ""))
+
+    reasoning_chain: list[ReasoningStep] = []
 
     # ---- Step 1: Summary Layer ----
     step1 = ReasoningStep(
@@ -37,7 +49,7 @@ async def run_synthesis(state: GlobalState) -> dict[str, Any]:
         title="汇总层 - 提取核心结论",
         content=_build_summary(feasibility, resource, risk),
     )
-    state.setdefault("reasoning_chain", []).append(step1)  # type: ignore[union-attr]
+    reasoning_chain.append(step1)
 
     # ---- Step 2: Conflict Identification Layer ----
     conflicts = detect_conflicts(feasibility, resource, risk)
@@ -46,7 +58,7 @@ async def run_synthesis(state: GlobalState) -> dict[str, Any]:
         title="冲突识别层 - 检测结论矛盾",
         content=_format_conflicts(conflicts),
     )
-    state.setdefault("reasoning_chain", []).append(step2)  # type: ignore[union-attr]
+    reasoning_chain.append(step2)
 
     # ---- Step 3: Path Exploration Layer ----
     step3_content = _explore_paths(conflicts)
@@ -55,7 +67,7 @@ async def run_synthesis(state: GlobalState) -> dict[str, Any]:
         title="路径推演层 - 推演解决路径",
         content=step3_content,
     )
-    state.setdefault("reasoning_chain", []).append(step3)  # type: ignore[union-attr]
+    reasoning_chain.append(step3)
 
     # ---- Step 4 & 5: LLM-based Decision and Output ----
     prompt = SYNTHESIS_PROMPT.format(
@@ -63,11 +75,14 @@ async def run_synthesis(state: GlobalState) -> dict[str, Any]:
         feasibility_result=json.dumps(feasibility, ensure_ascii=False, default=str),
         resource_result=json.dumps(resource, ensure_ascii=False, default=str),
         risk_result=json.dumps(risk, ensure_ascii=False, default=str),
-        conflicts=json.dumps([_conflict_to_dict(c) for c in conflicts], ensure_ascii=False),
+        conflicts=json.dumps(
+            [_conflict_to_dict(c) for c in conflicts], ensure_ascii=False
+        ),
     )
-    system_prompt = "你是一个综合分析专家，请严格按照五步推理格式以JSON输出。"
 
-    response = await llm_call(system_prompt, prompt, max_tokens=4096)
+    response = await llm_call(
+        AGENT_SYSTEM_PROMPTS["synthesis"], prompt, max_tokens=4096
+    )
 
     try:
         data = json.loads(response)
@@ -78,18 +93,19 @@ async def run_synthesis(state: GlobalState) -> dict[str, Any]:
     # ---- Step 4: Decision Layer ----
     step4 = ReasoningStep(
         layer=4,
-        title="决策层 - 选择最优路径",
-        content=data.get("decision_reasoning", "结合企业战略优先级进行决策"),
+        title="决策层 - 结合企业战略选择最优路径",
+        content=f"{corporate_strategy}\n\n{data.get('decision_reasoning', '结合企业战略优先级进行决策')}",
     )
-    state.setdefault("reasoning_chain", []).append(step4)  # type: ignore[union-attr]
+    reasoning_chain.append(step4)
 
     # ---- Step 5: Output Layer ----
+    recommendation = data.get("recommendation", "")
     step5 = ReasoningStep(
         layer=5,
         title="输出层 - 最终建议",
-        content=data.get("recommendation", ""),
+        content=recommendation,
     )
-    state.setdefault("reasoning_chain", []).append(step5)  # type: ignore[union-attr]
+    reasoning_chain.append(step5)
 
     final_decision_str = data.get("final_decision", "defer")
     try:
@@ -99,10 +115,17 @@ async def run_synthesis(state: GlobalState) -> dict[str, Any]:
 
     return {
         "final_decision": final_decision,
-        "final_recommendation": data.get("recommendation", ""),
+        "final_recommendation": recommendation,
         "key_assumptions": data.get("key_assumptions", []),
         "uncertainties": data.get("uncertainties", []),
-        "conflicts": [vars(c) for c in conflicts],
+        "conflicts": [_conflict_to_dict(c) for c in conflicts],
+        "reasoning_chain": reasoning_chain,
+        "synthesis_agent_result": AgentResult(
+            conclusion=f"最终建议: {final_decision.value}",
+            confidence=0.85,
+            reasoning=recommendation,
+            missing_info=[],
+        ),
         "phase": "review",
     }
 

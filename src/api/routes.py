@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import json
-import uuid
+import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
 
-from src.api.schemas import Base, Project
 from src.graph.state import create_initial_state
 from src.graph.workflow import compile_workflow
 from src.prompts.llm_config import get_settings
@@ -29,11 +28,14 @@ app.add_middleware(
 )
 
 settings = get_settings()
-
-engine = create_engine(settings.database_url, echo=False)
-Base.metadata.create_all(bind=engine)
-
 workflow_app = compile_workflow()
+_in_memory_projects: dict[str, dict[str, Any]] = {}
+
+
+def _persist_project_state(state: dict[str, Any]) -> None:
+    project_id = str(state.get("project_id", ""))
+    if project_id:
+        _in_memory_projects[project_id] = dict(state)
 
 
 # ---- Request/Response models ----
@@ -101,6 +103,7 @@ async def create_project(request: CreateProjectRequest) -> dict[str, Any]:
     config = {"configurable": {"thread_id": state["project_id"]}}
 
     result = await workflow_app.ainvoke(state, config)
+    _persist_project_state(result)
 
     return {
         "project_id": result.get("project_id", ""),
@@ -125,8 +128,14 @@ async def continue_dialog(
     state["dialog_history"] = state.get("dialog_history", []) + [
         {"role": "user", "answers": answers}
     ]
+    state["human_confirmed"] = True
+    state["needs_review"] = False
+    state["messages"] = state.get("messages", []) + [
+        {"role": "user", "content": json.dumps(answers, ensure_ascii=False)}
+    ]
 
     result = await workflow_app.ainvoke(state, config)
+    _persist_project_state(result)
 
     return {
         "project_id": project_id,
@@ -155,6 +164,7 @@ async def human_confirm(
         ]
 
     result = await workflow_app.ainvoke(state, config)
+    _persist_project_state(result)
 
     return {
         "project_id": project_id,
@@ -177,26 +187,58 @@ async def get_project(project_id: str) -> dict[str, Any]:
     return _serialize_state(state)
 
 
+@app.get("/api/projects/{project_id}/download")
+async def download_document(project_id: str) -> Any:
+    config = {"configurable": {"thread_id": project_id}}
+    current_state = workflow_app.get_state(config)
+
+    if current_state is None or not current_state.values:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    state = current_state.values
+    doc_path = state.get("document_path")
+
+    if not doc_path or not os.path.exists(doc_path):
+        raise HTTPException(status_code=404, detail="Document not found or not yet generated")
+
+    filename = os.path.basename(doc_path)
+    return FileResponse(
+        path=doc_path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+
 @app.get("/api/projects", response_model=list[ProjectResponse])
 async def list_projects() -> list[dict[str, Any]]:
-    configs: list[dict[str, Any]] = []
     items: list[dict[str, Any]] = []
 
-    with Session(engine) as session:
-        projects = session.execute(select(Project).order_by(Project.created_at.desc())).scalars().all()
-        for p in projects:
-            items.append({
-                "id": str(p.id),
-                "title": p.title,
-                "status": p.status,
-                "phase": p.phase,
-                "created_at": p.created_at.isoformat() if p.created_at else None,
-                "needs_review": p.needs_review,
-                "final_decision": p.final_decision,
-                "reasoning_chain": p.reasoning_chain or [],
-            })
+    for pid, state in _in_memory_projects.items():
+        reasoning_chain = []
+        for s in state.get("reasoning_chain", []):
+            if hasattr(s, "layer"):
+                reasoning_chain.append({
+                    "layer": s.layer,
+                    "title": s.title,
+                    "content": s.content,
+                    "timestamp": s.timestamp,
+                    "confidence": s.confidence,
+                })
+            elif isinstance(s, dict):
+                reasoning_chain.append(s)
 
-    return items
+        items.append({
+            "id": str(pid),
+            "title": state.get("project_info", {}).get("title", ""),
+            "status": str(state.get("phase", "init")),
+            "phase": str(state.get("phase", "init")),
+            "created_at": None,
+            "needs_review": state.get("needs_review", False),
+            "final_decision": str(state.get("final_decision", "")),
+            "reasoning_chain": reasoning_chain,
+        })
+
+    return sorted(items, key=lambda x: x["id"], reverse=True)
 
 
 @app.get("/api/projects/{project_id}/stream")
@@ -208,7 +250,11 @@ async def stream_reasoning(project_id: str) -> StreamingResponse:
         seen_steps = 0
 
         while True:
-            current_state = workflow_app.get_state(config)
+            try:
+                current_state = workflow_app.get_state(config)
+            except Exception:
+                break
+
             if current_state is None or not current_state.values:
                 break
 
@@ -219,12 +265,27 @@ async def stream_reasoning(project_id: str) -> StreamingResponse:
             if len(chain) > seen_steps:
                 new_steps = chain[seen_steps:]
                 for step in new_steps:
-                    yield f"data: {json.dumps({'type': 'reasoning_step', 'step': step, 'phase': phase}, default=str)}\n\n"
+                    step_data: dict[str, Any]
+                    if hasattr(step, "layer"):
+                        step_data = {
+                            "layer": step.layer,
+                            "title": step.title,
+                            "content": step.content,
+                            "timestamp": step.timestamp,
+                            "confidence": step.confidence,
+                        }
+                    elif isinstance(step, dict):
+                        step_data = step
+                    else:
+                        step_data = {}
+                    yield f"data: {json.dumps({'type': 'reasoning_step', 'step': step_data, 'phase': phase}, default=str)}\n\n"
                 seen_steps = len(chain)
 
             if phase in ("complete", "error"):
                 yield f"data: {json.dumps({'type': 'done', 'phase': phase})}\n\n"
                 break
+
+            await asyncio.sleep(0.5)
 
     return StreamingResponse(
         event_generator(),
@@ -238,6 +299,25 @@ async def stream_reasoning(project_id: str) -> StreamingResponse:
 
 
 def _serialize_state(state: dict[str, Any]) -> dict[str, Any]:
+    reasoning_chain: list[dict[str, Any]] = []
+    for s in state.get("reasoning_chain", []):
+        if hasattr(s, "layer"):
+            reasoning_chain.append({
+                "layer": s.layer,
+                "title": s.title,
+                "content": s.content,
+                "timestamp": s.timestamp,
+                "confidence": s.confidence,
+            })
+        elif isinstance(s, dict):
+            reasoning_chain.append({
+                "layer": s.get("layer", 0),
+                "title": s.get("title", ""),
+                "content": s.get("content", ""),
+                "timestamp": s.get("timestamp", ""),
+                "confidence": s.get("confidence", 1.0),
+            })
+
     return {
         "id": state.get("project_id", ""),
         "title": state.get("project_info", {}).get("title", ""),
@@ -247,16 +327,7 @@ def _serialize_state(state: dict[str, Any]) -> dict[str, Any]:
         "phase": str(state.get("phase", "init")),
         "project_info": state.get("project_info", {}),
         "dialog_history": state.get("dialog_history", []),
-        "reasoning_chain": [
-            {
-                "layer": s.layer if hasattr(s, "layer") else s.get("layer", 0),
-                "title": s.title if hasattr(s, "title") else s.get("title", ""),
-                "content": s.content if hasattr(s, "content") else s.get("content", ""),
-                "timestamp": s.timestamp if hasattr(s, "timestamp") else s.get("timestamp", ""),
-                "confidence": s.confidence if hasattr(s, "confidence") else s.get("confidence", 1.0),
-            }
-            for s in state.get("reasoning_chain", [])
-        ],
+        "reasoning_chain": reasoning_chain,
         "feasibility_result": state.get("feasibility_result"),
         "resource_result": state.get("resource_result"),
         "risk_result": state.get("risk_result"),

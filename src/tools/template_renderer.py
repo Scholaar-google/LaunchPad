@@ -20,21 +20,24 @@ def render_document(
     final_decision: str,
     key_assumptions: list[str],
     uncertainties: list[str],
+    generated_at: datetime | None = None,
 ) -> bytes:
+    now = generated_at or datetime.now(timezone.utc)
     doc = Document()
 
     # ---- Styles ----
     style = doc.styles["Normal"]
     font = style.font
     font.name = "SimSun"
-    font.size = Pt(11)
+    font.size = Pt(12)
 
     # ---- Title ----
     title = doc.add_heading("项目立项文档", level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    doc.add_paragraph(f"文档编号: PROJ-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}")
-    doc.add_paragraph(f"生成时间: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}")
+    doc.add_paragraph(f"文档编号: PROJ-{now.strftime('%Y%m%d-%H%M%S')}")
+    doc.add_paragraph(f"文档版本: v1.0")
+    doc.add_paragraph(f"生成时间: {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
     # ---- 1. 项目概述 ----
     doc.add_heading("一、项目概述", level=1)

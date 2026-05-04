@@ -68,6 +68,8 @@ class ProjectInfo(TypedDict, total=False):
     description: str
     background: str
     objectives: list[str]
+    scope_in: list[str]
+    scope_out: list[str]
     constraints: list[str]
     stakeholders: list[str]
     priority: str
