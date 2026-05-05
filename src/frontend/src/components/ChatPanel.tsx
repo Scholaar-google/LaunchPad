@@ -7,7 +7,7 @@ interface Props {
   onPhaseUpdate: (phase: string) => void
   onNeedsReview: (flag: boolean) => void
   onDocumentPath: (path: string | null) => void
-  onReasoningSteps: (steps: ReasoningStep[]) => void
+  onReasoningSteps: React.Dispatch<React.SetStateAction<ReasoningStep[]>>
 }
 
 interface Message {
@@ -69,6 +69,7 @@ const ChatPanel: React.FC<Props> = ({
   const chatEndRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const sseReconnectRef = useRef<number>(0)
+  const sseHasStepsRef = useRef<boolean>(false)
 
   useEffect(() => {
     const el = chatEndRef.current
@@ -103,6 +104,7 @@ const ChatPanel: React.FC<Props> = ({
         if (data.type === 'connected') {
           setSseConnected(true)
         } else if (data.type === 'reasoning_step' && data.step) {
+          sseHasStepsRef.current = true
           onReasoningSteps((prev: ReasoningStep[]) => [...prev, data.step])
         } else if (data.type === 'done') {
           if (data.phase !== 'timeout') {
@@ -134,7 +136,7 @@ const ChatPanel: React.FC<Props> = ({
       setNeedsReviewLocal(data.needs_review)
       onNeedsReview(data.needs_review)
       onDocumentPath(data.document_path)
-      if (data.reasoning_chain?.length > 0) {
+      if (data.reasoning_chain?.length > 0 && !sseHasStepsRef.current) {
         onReasoningSteps(data.reasoning_chain)
       }
     } catch {

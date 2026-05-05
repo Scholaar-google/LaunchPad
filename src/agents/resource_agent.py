@@ -49,7 +49,7 @@ async def run_resource(state: GlobalState) -> dict[str, Any]:
             "missing_info": ["需要更多信息"],
         }
 
-    raw_confidence = float(data.get("confidence", 0.5))
+    raw_confidence = float(data.get("confidence") or 0.5)
     adjusted_confidence = raw_confidence * data_confidence
 
     result = AgentResult(

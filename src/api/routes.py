@@ -154,9 +154,7 @@ async def continue_dialog(
     state["dialog_history"] = state.get("dialog_history", []) + [
         {"role": "user", "content": answer_text}
     ]
-    state["messages"] = state.get("messages", []) + [
-        {"role": "user", "content": answer_text}
-    ]
+    state["messages"] = [{"role": "user", "content": answer_text}]
 
     result = await workflow_app.ainvoke(state, config)
     _persist_project_state(result)

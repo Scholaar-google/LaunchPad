@@ -47,7 +47,7 @@ async def run_feasibility(state: GlobalState) -> dict[str, Any]:
 
     result = AgentResult(
         conclusion=data.get("conclusion", ""),
-        confidence=float(data.get("confidence", 0.5)),
+        confidence=float(data.get("confidence") or 0.5),
         reasoning=data.get("reasoning", ""),
         missing_info=data.get("missing_info", []),
     )
