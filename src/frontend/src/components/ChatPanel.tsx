@@ -46,6 +46,8 @@ const COLORS = {
   success: '#4ecca3',
   border: '#ddd',
   textMuted: '#888',
+  error: '#c0392b',
+  errorBg: '#fff0f0',
 } as const
 
 const ChatPanel: React.FC<Props> = ({
@@ -61,7 +63,9 @@ const ChatPanel: React.FC<Props> = ({
   const [questions, setQuestions] = useState<QuestionItem[]>([])
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [needsReview, setNeedsReviewLocal] = useState(false)
+  const [, setSseConnected] = useState(false)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const sseReconnectRef = useRef<number>(0)
@@ -78,6 +82,7 @@ const ChatPanel: React.FC<Props> = ({
 
   useEffect(() => {
     if (projectId) {
+      setError(null)
       startSSEStream(projectId)
       fetchProjectDetail(projectId)
     }
@@ -95,7 +100,9 @@ const ChatPanel: React.FC<Props> = ({
     es.addEventListener('message', (event) => {
       try {
         const data = JSON.parse(event.data)
-        if (data.type === 'reasoning_step' && data.step) {
+        if (data.type === 'connected') {
+          setSseConnected(true)
+        } else if (data.type === 'reasoning_step' && data.step) {
           onReasoningSteps((prev: ReasoningStep[]) => [...prev, data.step])
         } else if (data.type === 'done') {
           if (data.phase !== 'timeout') {
@@ -138,6 +145,7 @@ const ChatPanel: React.FC<Props> = ({
   const handleSubmit = useCallback(async () => {
     if (!requirement.trim()) return
     setLoading(true)
+    setError(null)
 
     try {
       const res = await fetch('/api/projects', {
@@ -145,7 +153,7 @@ const ChatPanel: React.FC<Props> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ requirement: requirement.trim() }),
       })
-      if (!res.ok) throw new Error('Failed')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: DialogResponse = await res.json()
 
       onProjectCreated(data.project_id)
@@ -162,10 +170,7 @@ const ChatPanel: React.FC<Props> = ({
 
       onPhaseUpdate(data.phase)
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: '请求失败，请检查服务是否启动。' },
-      ])
+      setError('请求失败，请检查后端服务是否已启动。')
     } finally {
       setLoading(false)
     }
@@ -174,15 +179,13 @@ const ChatPanel: React.FC<Props> = ({
   const handleAnswerSubmit = useCallback(async () => {
     if (!projectId || Object.keys(answers).length === 0) return
     setLoading(true)
+    setError(null)
 
     const answerText = Object.entries(answers)
       .map(([k, v]) => `${k}: ${v}`)
       .join('\n')
 
-    setMessages((prev) => [
-      ...prev,
-      { role: 'user', content: answerText },
-    ])
+    setMessages((prev) => [...prev, { role: 'user', content: answerText }])
 
     try {
       const res = await fetch(`/api/projects/${projectId}/dialog`, {
@@ -190,6 +193,10 @@ const ChatPanel: React.FC<Props> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ answers }),
       })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error((errData as any).detail || `HTTP ${res.status}`)
+      }
       const data: DialogResponse = await res.json()
 
       if (data.questions && data.questions.length > 0) {
@@ -205,10 +212,7 @@ const ChatPanel: React.FC<Props> = ({
       setAnswers({})
       onPhaseUpdate(data.phase)
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: '请求失败。' },
-      ])
+      setError('提交回答失败，请重试。')
     } finally {
       setLoading(false)
     }
@@ -217,6 +221,7 @@ const ChatPanel: React.FC<Props> = ({
   const handleConfirm = useCallback(async (confirmed: boolean) => {
     if (!projectId) return
     setLoading(true)
+    setError(null)
 
     try {
       const res = await fetch(`/api/projects/${projectId}/confirm`, {
@@ -243,7 +248,7 @@ const ChatPanel: React.FC<Props> = ({
       onNeedsReview(false)
       onDocumentPath(data.document_path)
     } catch {
-      setMessages((prev) => [...prev, { role: 'system', content: '确认操作失败。' }])
+      setError('操作失败，请检查网络连接后重试。')
     } finally {
       setLoading(false)
     }
@@ -258,6 +263,13 @@ const ChatPanel: React.FC<Props> = ({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+        {error && (
+          <div className="error-banner">
+            <span>{error}</span>
+            <button onClick={() => setError(null)}>✕</button>
+          </div>
+        )}
+
         {messages.length === 0 && !projectId && (
           <div style={{ textAlign: 'center', paddingTop: 60, color: COLORS.textMuted }}>
             <h3>企业智能需求分析与立项系统</h3>
@@ -269,15 +281,10 @@ const ChatPanel: React.FC<Props> = ({
           <div
             key={i}
             style={{
-              marginBottom: 12,
-              padding: '10px 14px',
-              borderRadius: 8,
+              marginBottom: 12, padding: '10px 14px', borderRadius: 8,
               background:
-                msg.role === 'user'
-                  ? COLORS.bgUser
-                  : msg.role === 'system'
-                  ? COLORS.bgSystem
-                  : COLORS.bgAssistant,
+                msg.role === 'user' ? COLORS.bgUser :
+                msg.role === 'system' ? COLORS.bgSystem : COLORS.bgAssistant,
               maxWidth: '80%',
               alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
             }}
@@ -300,18 +307,12 @@ const ChatPanel: React.FC<Props> = ({
                       type="text"
                       value={answers[q.id] || ''}
                       onChange={(e) =>
-                        setAnswers((prev) => ({
-                          ...prev,
-                          [q.id]: e.target.value,
-                        }))
+                        setAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
                       }
                       placeholder="请输入您的回答..."
                       style={{
-                        width: '100%',
-                        padding: '6px 10px',
-                        border: `1px solid ${COLORS.border}`,
-                        borderRadius: 4,
-                        fontSize: 13,
+                        width: '100%', padding: '6px 10px',
+                        border: `1px solid ${COLORS.border}`, borderRadius: 4, fontSize: 13,
                       }}
                     />
                   </div>
@@ -322,21 +323,18 @@ const ChatPanel: React.FC<Props> = ({
         ))}
 
         {loading && (
-          <div style={{ color: COLORS.textMuted, fontSize: 13, padding: 8 }}>
-            正在分析...
+          <div style={{ color: COLORS.textMuted, fontSize: 13, padding: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span className="spinner-dot">●</span>
+            <span className="spinner-dot">●</span>
+            <span className="spinner-dot">●</span>
+            <span style={{ marginLeft: 4 }}>正在分析</span>
           </div>
         )}
 
         <div ref={chatEndRef} />
       </div>
 
-      <div
-        style={{
-          borderTop: `1px solid ${COLORS.border}`,
-          padding: '12px 16px',
-          background: '#fff',
-        }}
-      >
+      <div style={{ borderTop: `1px solid ${COLORS.border}`, padding: '12px 16px', background: '#fff' }}>
         {questions.length > 0 ? (
           <div>
             <button
@@ -353,13 +351,11 @@ const ChatPanel: React.FC<Props> = ({
               type="text"
               value={requirement}
               onChange={(e) => setRequirement(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
               placeholder="输入补充信息或新需求..."
               style={{
-                flex: 1,
-                padding: '8px 12px',
-                border: `1px solid ${COLORS.border}`,
-                borderRadius: 6,
-                fontSize: 14,
+                flex: 1, padding: '8px 12px', border: `1px solid ${COLORS.border}`,
+                borderRadius: 6, fontSize: 14,
               }}
             />
             <button
@@ -379,11 +375,8 @@ const ChatPanel: React.FC<Props> = ({
               onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
               placeholder="请描述您的项目需求，例如：我们需要做一个内部考勤管理系统..."
               style={{
-                flex: 1,
-                padding: '8px 12px',
-                border: `1px solid ${COLORS.border}`,
-                borderRadius: 6,
-                fontSize: 14,
+                flex: 1, padding: '8px 12px', border: `1px solid ${COLORS.border}`,
+                borderRadius: 6, fontSize: 14,
               }}
             />
             <button
@@ -442,13 +435,8 @@ const ChatPanel: React.FC<Props> = ({
 }
 
 const primaryBtnStyle: React.CSSProperties = {
-  padding: '8px 20px',
-  background: COLORS.primary,
-  color: '#fff',
-  border: 'none',
-  borderRadius: 6,
-  cursor: 'pointer',
-  fontSize: 14,
+  padding: '8px 20px', background: COLORS.primary, color: '#fff',
+  border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14,
 }
 
 export default ChatPanel
